@@ -1,0 +1,22 @@
+{
+    "raw_file": ["/path/to/sparsity/example/data/test.zarr"],
+    "labels_dataset": ["labels"],
+    "labels_mask": [null],
+    "pred_file": [
+        "/path/to/sparsity/example/affs_nets/affs_2d/LR_noEA_2gb/jan/2d_test.zarr",
+        "/path/to/sparsity/example/affs_nets/affs_2d/LR_noEA_2gb/arlo/2d_test.zarr",
+        "/path/to/sparsity/example/affs_nets/affs_2d/LR_noEA_2gb/vijay/2d_test.zarr"
+    ],
+    "pred_dataset": [
+        "dense_2d/rep_1/3d_affs_2500_from_stacked_affs_2500",
+        "disk_1/rep_1/3d_affs_2500_from_stacked_affs_2500",
+        "disk_1-obj_002/rep_1/3d_affs_2500_from_stacked_affs_2500",
+        "obj_002a/rep_1/3d_affs_20000_from_stacked_affs_30000"
+    ],
+    "roi": [[[1500, 5160, 5488],[500, 1600, 1600]]],
+    "normalize_preds": [true,false],
+    "min_seed_distance": [10],
+    "merge_function": ["hist_quant_50","hist_quant_50_initmax","hist_quant_75","hist_quant_75_initmax","mean"],
+    "erode_steps": [0,1,2],
+    "clean_up": [0,100,200]
+}

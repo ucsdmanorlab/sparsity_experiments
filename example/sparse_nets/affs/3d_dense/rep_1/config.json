@@ -1,0 +1,22 @@
+{
+    "sparsity": "",
+    "max_iteration": 20001,
+    "in_channels": 1,
+    "output_shapes": [3],
+    "fmap_inc_factor": 5,
+    "downsample_factors": [[1, 2, 2], [1, 2, 2], [1, 2, 2]],
+    "kernel_size_down": [
+        [[3, 3, 3], [3, 3, 3]],
+        [[3, 3, 3], [3, 3, 3]],
+        [[1, 3, 3], [1, 3, 3]],
+        [[1, 3, 3], [1, 3, 3]]],
+    "kernel_size_up": [
+        [[1, 3, 3], [1, 3, 3]],
+        [[3, 3, 3], [3, 3, 3]],
+        [[3, 3, 3], [3, 3, 3]]],
+    "input_shape": [24, 196, 196],
+    "output_shape": [8, 104, 104],
+    "voxel_size": [50, 8, 8],
+    "sigma":80,
+    "batch_size": 1
+}
