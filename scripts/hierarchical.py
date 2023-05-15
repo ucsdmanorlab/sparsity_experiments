@@ -2,7 +2,7 @@ import sys
 import os
 import numpy as np
 
-from funlib.persistence import open_ds
+from funlib.persistence import open_ds, prepare_ds
 from funlib.geometry import Coordinate,Roi
 
 from scipy.ndimage import maximum_filter
@@ -168,12 +168,12 @@ def watershed_from_boundary_distance(
 def post(
         pred_file,
         pred_dataset,
-        roi,
-        normalize_preds,
-        min_seed_distance,
-        merge_function,
-        erode_steps,
-        clean_up):
+        roi=None,
+        normalize_preds=False,
+        min_seed_distance=10,
+        merge_function="mean",
+        erode_steps=0,
+        clean_up=0):
 
     # load
     pred = open_ds(pred_file,pred_dataset)
@@ -241,3 +241,32 @@ def post(
         segs[threshold] = seg.astype(np.uint64)
 
     return segs, fragments
+
+if __name__ == "__main__":
+
+    pred_file = sys.argv[1]
+    pred_dataset = sys.argv[2]
+    roi = None
+    thresh = sys.argv[3]
+
+    segs,_ = post(
+            pred_file,
+            pred_dataset,
+            roi=roi)
+    
+    pred = open_ds(pred_file,pred_dataset)
+
+    if roi is not None:
+        roi = Roi(pred.roi.offset+Coordinate(roi[0]),roi[1])
+    else:
+        roi = pred.roi
+    
+    print("writing")
+    out_seg = prepare_ds(
+            pred_file,
+            f"seg",
+            roi,
+            pred.voxel_size,
+            np.uint64)
+
+    out_seg[roi] = segs[float(thresh)]

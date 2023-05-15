@@ -2,7 +2,6 @@ import numpy as np
 
 from funlib.persistence import open_ds
 from funlib.geometry import Coordinate,Roi
-from funlib.segment.arrays import replace_values
 
 from skimage.filters import threshold_otsu
 
@@ -12,8 +11,61 @@ from affogato.segmentation import MWSGridGraph, compute_mws_clustering
 from typing import Optional
 
 from skimage.morphology import remove_small_objects
-from scipy.ndimage import distance_transform_edt, maximum_filter, measurements, gaussian_filter
+from scipy.ndimage import distance_transform_edt, maximum_filter, binary_erosion
 from skimage.measure import label
+
+
+def erode(labels, steps, only_xy=True):
+    
+    if only_xy:
+        assert len(labels.shape) == 3
+        for z in range(labels.shape[0]):
+            labels[z] = erode(labels[z], steps, only_xy=False)
+        return labels
+
+    # get all foreground voxels by erosion of each component
+    foreground = np.zeros(shape=labels.shape, dtype=bool)
+    
+    for label in np.unique(labels):
+        if label == 0:
+            continue
+        label_mask = labels==label
+        # Assume that masked out values are the same as the label we are
+        # eroding in this iteration. This ensures that at the boundary to
+        # a masked region the value blob is not shrinking.
+        eroded_label_mask = binary_erosion(label_mask, iterations=steps, border_value=1)
+
+        foreground = np.logical_or(eroded_label_mask, foreground)
+
+    # label new background
+    background = np.logical_not(foreground)
+    labels[background] = 0
+
+    return labels
+
+
+def expand_labels(labels):
+
+    distance = labels.shape[0]
+
+    distances, indices = distance_transform_edt(
+            labels == 0,
+            return_indices=True)
+
+    expanded_labels = np.zeros_like(labels)
+
+    dilate_mask = distances <= distance
+
+    masked_indices = [
+            dimension_indices[dilate_mask]
+            for dimension_indices in indices
+    ]
+
+    nearest_labels = labels[tuple(masked_indices)]
+
+    expanded_labels[dilate_mask] = nearest_labels
+
+    return expanded_labels
 
 
 def watershed_from_boundary_distance(
@@ -132,13 +184,14 @@ def post(
         pred_file,
         pred_dataset,
         roi,
+        normalize_preds,
         neighborhood,
         stride,
         randomize_strides,
         algorithm,
         mask_thresh,
-        filter_fragments,
-        **kwargs):
+        erode_steps,
+        clean_up):
 
     # load
     pred = open_ds(pred_file,pred_dataset)
@@ -148,44 +201,25 @@ def post(
     else:
         roi = pred.roi
 
-
-    voxel_size = pred.voxel_size
-    context = Coordinate([4,16,16]) #* voxel_size
-
     pred = pred.to_ndarray(roi)
-   
-    if pred.dtype == np.uint8:
-        max_affinity_value = 255.0
-        pred = pred.astype(np.float32)
-    else:
-        max_affinity_value = 1.0
+    
+    # normalize
+    pred = (pred / np.max(pred)).astype(np.float32)
+    
+    # normalize channel-wise
+    if normalize_preds:
+        for c in range(len(pred)):
+            
+            max_v = np.max(pred[c])
+            min_v = np.min(pred[c])
 
-    if pred.max() < 1e-3:
-        return
-
-    pred /= max_affinity_value
+            if max_v != min_v:
+                pred[c] = (pred[c] - min_v)/(max_v - min_v)
+            else:
+                pred[c] = np.ones_like(pred[c])
     
     # prepare
-    offsets = [tuple(x) for x in neighborhood]
- 
-    # extract fragments
-    adjacent_edge_bias = -0.4  # bias towards merging
-    lr_edge_bias = -0.7  # bias heavily towards splitting
-
-    # add some random noise to affs (this is particularly necessary if your affs are
-    #  stored as uint8 or similar)
-    # If you have many affinities of the exact same value the order they are processed
-    # in may be fifo, so you can get annoying streaks.
-    random_noise = np.random.randn(*pred.shape) * 0.001
-    # add smoothed affs, to solve a similar issue to the random noise. We want to bias
-    # towards processing the central regions of objects first.
-    
-#    smoothed_pred = (
-#        gaussian_filter(pred, sigma=(0, *(Coordinate(context) / 3))) - 0.5
-#    ) * 0.01
-#    shift = np.array(
-#        [adjacent_edge_bias if max(offset) <= 1 else lr_edge_bias for offset in offsets]
-#    ).reshape((-1, *((1,) * (len(pred.shape) - 1))))
+    neighborhood = [tuple(x) for x in neighborhood]
     
     if mask_thresh > 0.0 or algorithm == "seeded":    
         
@@ -220,35 +254,28 @@ def post(
         seg = seeded_mutex_watershed(
             seeds=seeds,
             affs=pred,
-            offsets=offsets,
+            offsets=neighborhood,
             mask=mask,
             stride=stride,
             randomize_strides=randomize_strides)
     
     else:
         seg = mutex_watershed(
-            pred + random_noise,#+ shift + random_noise + smoothed_pred,
-            offsets=offsets,
+            pred,
+            offsets=neighborhood,
             stride=stride,
             algorithm=algorithm,
             mask=mask,
             randomize_strides=randomize_strides)
 
-    if filter_fragments > 0:
-        average_pred = np.mean(pred.data, axis=0)
+    # clean up
+    if clean_up > 0:
+        seg = remove_small_objects(seg.astype(np.int64),min_size=clean_up)
+        seg = expand_labels(seg)
+        seg = label(seg, connectivity=1).astype(np.uint64)
 
-        filtered_fragments = []
-
-        fragment_ids = np.unique(seg)
-
-        for fragment, mean in zip(
-            fragment_ids, measurements.mean(average_pred, seg, fragment_ids)
-        ):
-            if mean < filter_fragments:
-                filtered_fragments.append(fragment)
-
-        filtered_fragments = np.array(filtered_fragments, dtype=seg.dtype)
-        replace = np.zeros_like(filtered_fragments)
-        replace_values(seg, filtered_fragments, replace, inplace=True)
+    # erode
+    if erode_steps > 0:
+        seg = erode(seg,erode_steps)
     
     return seg

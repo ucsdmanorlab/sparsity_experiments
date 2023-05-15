@@ -9,7 +9,7 @@ import gc
 from funlib.persistence import open_ds
 from funlib.geometry import Coordinate,Roi
 from funlib.evaluate import rand_voi
-import mws
+import mws_copy
 
 
 def evaluate(
@@ -55,23 +55,34 @@ def evaluate(
 def eval_run(args):
 
     roi = args["roi"]
-#
+
     raw_file = args["raw_file"]
     labels_dataset = args["labels_dataset"] #+ f"/{roi}"
     labels_mask = args["labels_mask"] #+ f"/{roi}"
     pred_file = args["pred_file"]
     pred_dataset = args["pred_dataset"] #+ f"/{roi}"
-#    normalize_preds = args["normalize_preds"]
-#    stride = args["stride"]
-#    randomize_strides = args["randomize_strides"]
-#    algorithm = args["algorithm"]
-#    neighborhood = args["neighborhood"]
-#    mask_thresh = args["mask_thresh"]
-#    erode_steps = args["erode_steps"]
-#    clean_up = args["clean_up"]
+    normalize_preds = args["normalize_preds"]
+    stride = args["stride"]
+    randomize_strides = args["randomize_strides"]
+    algorithm = args["algorithm"]
+    neighborhood = args["neighborhood"]
+    mask_thresh = args["mask_thresh"]
+    erode_steps = args["erode_steps"]
+    clean_up = args["clean_up"]
 
     #run post
-    seg = mws.post(**args)
+    seg = mws_copy.post(
+        pred_file,
+        pred_dataset,
+        roi,
+        normalize_preds,
+        neighborhood,
+        stride,
+        randomize_strides,
+        algorithm,
+        mask_thresh,
+        erode_steps,
+        clean_up)
 
     #get roi
     if roi is not None:
