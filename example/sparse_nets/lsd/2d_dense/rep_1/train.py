@@ -25,9 +25,8 @@ neighborhood = [[-1,0],[0,-1]]
 
 data_dir = os.path.join(setup_dir,"../../../../data/2d_train.zarr")
 sparsity = config["sparsity"] # "" if dense, else "sparsity_crop/rep". example: "obj_002a/rep_3"
-if sparsity != "": sparsity += "/"
 
-available_sections = [x for x in os.listdir(os.path.join(data_dir,sparsity+"/labels")) if '.' not in x]
+available_sections = [x for x in os.listdir(os.path.join(data_dir,sparsity,"labels")) if '.' not in x]
 print(f"Available sections to train on: {available_sections}")
 
 def calc_max_padding(output_size, voxel_size, sigma, mode="shrink"):
@@ -215,9 +214,9 @@ def train(
         gp.ZarrSource(
             data_dir,
             {
-                raw: sparsity + f'raw/{i}',
-                labels: sparsity + f'labels/{i}',
-                unlabelled: sparsity + f'unlabelled/{i}',
+                raw: os.path.join(sparsity,"raw",str(i)),
+                labels: os.path.join(sparsity,"labels",str(i)),
+                unlabelled: os.path.join(sparsity,"unlabelled",str(i)),
             },
             {
                 raw: gp.ArraySpec(interpolatable=True),
@@ -264,7 +263,7 @@ def train(
                 output_shape,
                 sigma,
                 voxel_size,
-                scale=5,
+                scale=2,
                 num_points=num_points)
 
         pipeline += Unlabel(labels,unlabelled)

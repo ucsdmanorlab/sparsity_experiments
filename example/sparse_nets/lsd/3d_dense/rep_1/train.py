@@ -26,7 +26,6 @@ neighborhood = [[-1,0,0],[0,-1,0],[0,0,-1]]
 data_dir = os.path.join(setup_dir,"../../../../data/train.zarr")
 sparsity = config["sparsity"] # "" if dense, else "sparsity_crop/rep". example: "obj_002a/rep_3"
 
-if sparsity != "": sparsity += "/"
 
 def calc_max_padding(output_size, voxel_size, sigma, mode="shrink"):
 
@@ -47,7 +46,7 @@ def calc_max_padding(output_size, voxel_size, sigma, mode="shrink"):
 
 class Unlabel(gp.BatchFilter):
 
-  def __init__(self, labels, unlabelled):
+  def __init__(sel,,labels, unlabelled):
     self.labels = labels
     self.unlabelled = unlabelled
 
@@ -159,9 +158,9 @@ def train(
     source = gp.ZarrSource(
             data_dir,
             {
-                raw: sparsity + f'raw',
-                labels: sparsity + f'labels',
-                unlabelled: sparsity + f'unlabelled',
+                raw: os.path.join(sparsity,"raw"),
+                labels: os.path.join(sparsity,"labels"),
+                unlabelled: os.path.join(sparsity,"unlabelled"),
             },
             {
                 raw: gp.ArraySpec(interpolatable=True),
