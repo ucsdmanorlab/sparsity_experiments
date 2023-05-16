@@ -46,7 +46,7 @@ def calc_max_padding(output_size, voxel_size, sigma, mode="shrink"):
 
 class Unlabel(gp.BatchFilter):
 
-  def __init__(sel,,labels, unlabelled):
+  def __init__(self,labels, unlabelled):
     self.labels = labels
     self.unlabelled = unlabelled
 
