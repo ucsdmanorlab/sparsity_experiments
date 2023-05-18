@@ -105,7 +105,6 @@ def predict(
             source +
             gp.Normalize(input_affs) +
             gp.Pad(input_affs, None) +
-            gp.IntensityScaleShift(input_affs, 2,-1) +
             gp.Unsqueeze([input_affs]) +
             predict +
             gp.Squeeze([pred_affs]) +
