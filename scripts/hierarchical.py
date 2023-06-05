@@ -246,13 +246,17 @@ if __name__ == "__main__":
 
     pred_file = sys.argv[1]
     pred_dataset = sys.argv[2]
+    out_file = sys.argv[3]
+    out_ds = sys.argv[4]
     roi = None
-    thresh = sys.argv[3]
+    thresh = sys.argv[5]
+    merge_fn = sys.argv[6]
 
     segs,_ = post(
             pred_file,
             pred_dataset,
-            roi=roi)
+            roi=roi,
+            merge_function=merge_fn)
     
     pred = open_ds(pred_file,pred_dataset)
 
@@ -262,9 +266,10 @@ if __name__ == "__main__":
         roi = pred.roi
     
     print("writing")
+
     out_seg = prepare_ds(
-            pred_file,
-            f"seg",
+            out_file,
+            out_ds,
             roi,
             pred.voxel_size,
             np.uint64)

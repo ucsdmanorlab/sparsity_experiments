@@ -114,7 +114,8 @@ class CreateLabels(gp.BatchFilter):
 
     def process(self, batch, request):
 
-        size = np.concatenate([batch[self.labels].data,]*self.anisotropy).shape
+        anisotropy = random.choice(range(self.anisotropy)) + 1
+        size = np.concatenate([batch[self.labels].data,]*anisotropy).shape
 
         np.random.seed()
         peaks = np.random.random(size).astype(np.float32)
@@ -123,7 +124,7 @@ class CreateLabels(gp.BatchFilter):
         maxima = max_filtered == peaks
         seeds = label(maxima,connectivity=1)
         
-        batch[self.labels].data = watershed(1.0 - peaks, seeds)[::self.anisotropy].astype(np.uint64)
+        batch[self.labels].data = watershed(1.0 - peaks, seeds)[::anisotropy].astype(np.uint64)
 
 
 class SmoothLSDs(gp.BatchFilter):

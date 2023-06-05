@@ -24,7 +24,12 @@ with open(config_path,"r") as f:
 neighborhood = [[-1,0,0],[0,-1,0],[0,0,-1]]
 
 data_dir = os.path.join(setup_dir,"../../../../data/train.zarr")
-sparsity = config["sparsity"] # "" if dense, else "sparsity_crop/rep". example: "obj_002a/rep_3"
+#sparsity = config["sparsity"] # "" if dense, else "sparsity_crop/rep". example: "obj_002a/rep_3"
+if "dense" in setup_dir or ("disk" in setup_dir and "obj" not in setup_dir):
+    sparsity = ""
+else:
+    rep = setup_dir.split('/')[-1]
+    sparsity = os.path.join(setup_dir.split('/')[-2].split('-')[-1],rep)
 
 
 def calc_max_padding(output_size, voxel_size, sigma, mode="shrink"):
@@ -181,7 +186,7 @@ def train(
     source += gp.Pad(raw, None)
     source += gp.Pad(labels, labels_padding)
     source += gp.Pad(unlabelled, labels_padding)
-    source += gp.RandomLocation(mask=unlabelled,min_masked=0.075)
+    source += gp.RandomLocation(mask=unlabelled,min_masked=0.001)
 
     pipeline = source
 

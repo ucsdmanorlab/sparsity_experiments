@@ -17,8 +17,8 @@ class MtlsdModel(torch.nn.Module):
 
         num_fmaps = sum(output_shapes)
 
-        if num_fmaps < 5:
-            num_fmaps = 5
+        if num_fmaps < 12:
+            num_fmaps = 12
 
         self.unet = UNet(
                 in_channels=in_channels,

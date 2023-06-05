@@ -23,7 +23,12 @@ with open(config_path,"r") as f:
 neighborhood = [[-1,0],[0,-1]]
 
 data_dir = os.path.join(setup_dir,"../../../../data/2d_train.zarr")
-sparsity = config["sparsity"] # "" if dense, else "sparsity_crop/rep". example: "obj_002a/rep_3"
+#sparsity = config["sparsity"] # "" if dense, else "sparsity_crop/rep". example: "obj_002a/rep_3"
+if "dense" in setup_dir or ("disk" in setup_dir and "obj" not in setup_dir):
+    sparsity = ""
+else:
+    rep = setup_dir.split('/')[-1]
+    sparsity = os.path.join(setup_dir.split('/')[-2].split('-')[-1],rep)
 
 available_sections = [x for x in os.listdir(os.path.join(data_dir,sparsity,"labels")) if '.' not in x]
 print(f"Available sections to train on: {available_sections}")
@@ -229,7 +234,7 @@ def train(
         gp.Pad(raw, None) +
         gp.Pad(labels, labels_padding) +
         gp.Pad(unlabelled, labels_padding) +
-        gp.RandomLocation(mask=unlabelled,min_masked=0.075)
+        gp.RandomLocation(mask=unlabelled,min_masked=0.001)
         for i in available_sections
     )
 

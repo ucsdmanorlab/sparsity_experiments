@@ -114,13 +114,14 @@ class CreateLabels(gp.BatchFilter):
     def process(self, batch, request):
 
         labels = batch[self.labels].data
-        labels = np.concatenate([labels,]*self.anisotropy)
+        anisotropy = random.choice(range(self.anisotropy)) + 1
+        labels = np.concatenate([labels,]*anisotropy)
         shape = labels.shape
 
         spec = batch[self.labels].spec
 
         # sample random points
-        num_points = random.randint(25,50*self.anisotropy)
+        num_points = random.randint(25,50*anisotropy)
 
         for n in range(num_points):
             z = random.randint(1, labels.shape[0] - 1)
@@ -142,7 +143,7 @@ class CreateLabels(gp.BatchFilter):
         # relabel
         labels = label(labels)
 
-        batch[self.labels].data = labels[::self.anisotropy].astype(np.uint64)
+        batch[self.labels].data = labels[::anisotropy].astype(np.uint64)
 
 
 class SmoothAffs(gp.BatchFilter):

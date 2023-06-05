@@ -1,9 +1,8 @@
 {
-    "sparsity": "",
     "max_iteration": 20001,
     "in_channels": 1,
     "output_shapes": [10,3],
-    "fmap_inc_factor": 5,
+    "fmap_inc_factor": 6,
     "downsample_factors": [[1, 2, 2], [1, 2, 2], [1, 2, 2]],
     "kernel_size_down": [
         [[3, 3, 3], [3, 3, 3]],

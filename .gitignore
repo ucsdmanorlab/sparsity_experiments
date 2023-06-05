@@ -1,0 +1,16 @@
+*tar
+*sh
+*out*
+*err
+*OUT*
+*slurm
+*zarr
+*checkpoint*
+__pycache__
+jobs
+*cremi_a*
+*cremi_b*
+*cremi_c*
+*epi*
+*voljo*
+*fib25*

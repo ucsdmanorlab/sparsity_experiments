@@ -124,7 +124,7 @@ def predict(
 
 if __name__ == "__main__":
 
-    iterations = [2000,3000,4000,5000,6000,8000,10000,15000,20000]
+    iterations = [5000, 10000, 20000]
     input_lsds_file = sys.argv[1]
     input_lsds_dataset = sys.argv[2]
 
