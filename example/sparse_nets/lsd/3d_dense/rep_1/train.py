@@ -27,6 +27,8 @@ data_dir = os.path.join(setup_dir,"../../../../data/train.zarr")
 #sparsity = config["sparsity"] # "" if dense, else "sparsity_crop/rep". example: "obj_002a/rep_3"
 if "dense" in setup_dir or ("disk" in setup_dir and "obj" not in setup_dir):
     sparsity = ""
+elif "paint" in setup_dir and "10min" not in setup_dir:
+    sparsity = setup_dir.split('/')[-2]
 else:
     rep = setup_dir.split('/')[-1]
     sparsity = os.path.join(setup_dir.split('/')[-2].split('-')[-1],rep)
@@ -176,7 +178,7 @@ def train(
     source += gp.Pad(raw, None)
     source += gp.Pad(labels, labels_padding)
     source += gp.Pad(unlabelled, labels_padding)
-    source += gp.RandomLocation(mask=unlabelled,min_masked=0.001)
+    source += gp.RandomLocation(mask=unlabelled,min_masked=0.0001)
 
     pipeline = source
 
@@ -213,7 +215,7 @@ def train(
     pipeline += gp.Unsqueeze([raw])
     pipeline += gp.Stack(batch_size)
 
-    pipeline += gp.PreCache(num_workers=10, cache_size=40)
+    pipeline += gp.PreCache(num_workers=20, cache_size=50)
 
     pipeline += gp.torch.Train(
         model,

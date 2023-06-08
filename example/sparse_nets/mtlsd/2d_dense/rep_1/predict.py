@@ -1,3 +1,5 @@
+import subprocess
+from multiprocessing import Process
 import json
 import re
 import shutil
@@ -156,6 +158,9 @@ def natural_sort(l):
     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)] 
     return sorted(l, key=alphanum_key)
 
+def run_subprocess(command):
+    subprocess.run(command, shell=True)
+
 
 if __name__ == "__main__":
 
@@ -165,33 +170,62 @@ if __name__ == "__main__":
    
     out_file = os.path.join(setup_dir,os.path.basename(raw_file))
     
-    sections = [x for x in os.listdir(os.path.join(raw_file,raw_ds)) if '.' not in x]
-    sections = natural_sort(sections)
-    print(out_file, sections)
+    all_sections = [x for x in os.listdir(os.path.join(raw_file,raw_ds)) if '.' not in x]
+    all_sections = natural_sort(all_sections)
+    print(out_file, all_sections)
 
-    for iteration in iterations:
-        for section in sections: 
 
-            raw_dataset = f'{raw_ds}/{section}'
+    if len(sys.argv) > 1:
+        sections = sys.argv[1:]
 
-            predict(
-                iteration,
-                raw_file,
-                raw_dataset,
-                out_file)
+        for iteration in iterations:
+            for section in sections: 
 
-    #stack 2d to 3d
-    datasets = [x for x in os.listdir(out_file) if '.' not in x]
-    f = zarr.open(out_file,"a")
-    
-    offset_2d = f[datasets[0]][sections[0]].attrs["offset"]
+                raw_dataset = f'{raw_ds}/{section}'
 
-    for ds in datasets:
+                predict(
+                    iteration,
+                    raw_file,
+                    raw_dataset,
+                    out_file)
+
+    else:
+        set1 = all_sections[::3]
+        set2 = all_sections[1::3]
+        set3 = all_sections[2::3]
+
+        command1 = " ".join(['CUDA_VISIBLE_DEVICES="0"',"python", os.path.abspath(os.path.realpath(__file__)),] + set1)
+        command2 = " ".join(['CUDA_VISIBLE_DEVICES="1"',"python", os.path.abspath(os.path.realpath(__file__)),] + set2)
+        command3 = " ".join(['CUDA_VISIBLE_DEVICES="2"',"python", os.path.abspath(os.path.realpath(__file__)),] + set3)
+        commands = [command1, command2, command3]
+   
+        print(commands)
+
+        processes = []
+        for command in commands:
+            process = Process(target=run_subprocess, args=(command,))
+            process.start()
+            processes.append(process)
+
+        # Wait for all processes to complete
+        for process in processes:
+            process.join()
+
+        # Continue with the main script
+        print("All subprocesses completed.")
+
+        #stack 2d to 3d
+        datasets = [x for x in os.listdir(out_file) if '.' not in x]
+        f = zarr.open(out_file,"a")
         
-        data = np.stack([f[ds][section][:] for section in sections],axis=1)
+        offset_2d = f[datasets[0]][all_sections[0]].attrs["offset"]
 
-        f['stacked_'+ds] = data
-        f['stacked_'+ds].attrs["resolution"] = config['voxel_size_3d']
-        f['stacked_'+ds].attrs["offset"] = [0,*offset_2d]
+        for ds in datasets:
+            
+            data = np.stack([f[ds][section][:] for section in all_sections],axis=1)
+            
+            f['stacked_'+ds] = data
+            f['stacked_'+ds].attrs["resolution"] = config['voxel_size_3d']
+            f['stacked_'+ds].attrs["offset"] = [0,*offset_2d]
 
-        shutil.rmtree(os.path.join(out_file,ds))
+            shutil.rmtree(os.path.join(out_file,ds))
