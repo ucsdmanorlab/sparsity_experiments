@@ -1,5 +1,6 @@
+import time
 import subprocess
-from multiprocessing import Process
+from multiprocessing import Pool
 import json
 import re
 import shutil
@@ -151,8 +152,6 @@ if __name__ == "__main__":
     
     all_sections = [x for x in os.listdir(os.path.join(raw_file,raw_ds)) if '.' not in x]
     all_sections = natural_sort(all_sections)
-    print(out_file, all_sections)
-
 
     if len(sys.argv) > 1:
         sections = sys.argv[1:]
@@ -180,26 +179,20 @@ if __name__ == "__main__":
    
         print(commands)
 
-        processes = []
-        for command in commands:
-            process = Process(target=run_subprocess, args=(command,))
-            process.start()
-            processes.append(process)
-
-        # Wait for all processes to complete
-        for process in processes:
-            process.join()
-
-        # Continue with the main script
+        with Pool(3) as pool:
+            pool.map(run_subprocess, commands)
+        
         print("All subprocesses completed.")
 
         #stack 2d to 3d
         datasets = [x for x in os.listdir(out_file) if '.' not in x]
         f = zarr.open(out_file,"a")
         
-        offset_2d = f[datasets[0]][all_sections[0]].attrs["offset"]
+        offset_2d = f[datasets[0]][all_sections[-1]].attrs["offset"]
 
-        for ds in datasets:
+        for ds in datasets: 
+            if 'stacked' in ds:
+                continue
             
             data = np.stack([f[ds][section][:] for section in all_sections],axis=1)
             
