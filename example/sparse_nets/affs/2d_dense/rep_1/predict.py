@@ -20,6 +20,20 @@ from model import AffModel
 
 setup_dir = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
 
+iterations = [5000,10000,15000,20000]
+raw_file = os.path.join(setup_dir,"../../../../data/2d_test.zarr")
+raw_ds = "raw"
+
+def natural_sort(l): 
+    convert = lambda text: int(text) if text.isdigit() else text.lower() 
+    alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)] 
+    return sorted(l, key=alphanum_key)
+
+all_sections = [x for x in os.listdir(os.path.join(raw_file,raw_ds)) if '.' not in x]
+all_sections = natural_sort(all_sections)
+
+out_file = os.path.join(setup_dir,os.path.basename(raw_file))
+
 with open(os.path.join(setup_dir, 'config.json'), 'r') as f:
     config = json.load(f)
 
@@ -133,71 +147,50 @@ def predict(
     return total_output_roi
 
 
-def natural_sort(l): 
-    convert = lambda text: int(text) if text.isdigit() else text.lower() 
-    alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)] 
-    return sorted(l, key=alphanum_key)
+def worker(worker_id):
+    # time delay for workers
+    time.sleep(5*worker_id)
 
-def run_subprocess(command):
-    subprocess.run(command, shell=True)
+    # set GPU ID
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_id)
+
+    sections = all_sections[worker_id::num_gpus]
+    
+    print(f"GPU ID:{worker_id} predicting on sections: {sections}")
+
+    for iteration in iterations:
+        for section in sections: 
+
+            raw_dataset = f'{raw_ds}/{section}'
+
+            predict(
+                iteration,
+                raw_file,
+                raw_dataset,
+                out_file)
 
 
 if __name__ == "__main__":
 
-    iterations = [5000,10000,15000,20000]
-    raw_file = os.path.join(setup_dir,"../../../../data/2d_test.zarr")
-    raw_ds = "raw"
-   
-    out_file = os.path.join(setup_dir,os.path.basename(raw_file))
+    print(f"Starting inference on {out_file}")
+    num_gpus = 3
+
+    with Pool(num_gpus) as pool:
+        pool.map(worker, range(num_gpus))
     
-    all_sections = [x for x in os.listdir(os.path.join(raw_file,raw_ds)) if '.' not in x]
-    all_sections = natural_sort(all_sections)
+    print("All subprocesses completed.")
 
-    if len(sys.argv) > 1:
-        sections = sys.argv[1:]
+    #stack 2d to 3d
+    datasets = [x for x in os.listdir(out_file) if ('stacked' not in x and '.' not in x)]
+    f = zarr.open(out_file,"a")
+    
+    offset_2d = f[datasets[0]][all_sections[-1]].attrs["offset"]
 
-        for iteration in iterations:
-            for section in sections: 
-
-                raw_dataset = f'{raw_ds}/{section}'
-
-                predict(
-                    iteration,
-                    raw_file,
-                    raw_dataset,
-                    out_file)
-
-    else:
-        set1 = all_sections[::3]
-        set2 = all_sections[1::3]
-        set3 = all_sections[2::3]
-
-        command1 = " ".join(['CUDA_VISIBLE_DEVICES="0"',"python", os.path.abspath(os.path.realpath(__file__)),] + set1)
-        command2 = " ".join(['CUDA_VISIBLE_DEVICES="1"',"python", os.path.abspath(os.path.realpath(__file__)),] + set2)
-        command3 = " ".join(['CUDA_VISIBLE_DEVICES="2"',"python", os.path.abspath(os.path.realpath(__file__)),] + set3)
-        commands = [command1, command2, command3]
-   
-        print(commands)
-
-        with Pool(3) as pool:
-            pool.map(run_subprocess, commands)
+    for ds in datasets: 
+        data = np.stack([f[ds][section][:] for section in all_sections],axis=1)
         
-        print("All subprocesses completed.")
+        f['stacked_'+ds] = data
+        f['stacked_'+ds].attrs["resolution"] = config['voxel_size_3d']
+        f['stacked_'+ds].attrs["offset"] = [0,*offset_2d]
 
-        #stack 2d to 3d
-        datasets = [x for x in os.listdir(out_file) if '.' not in x]
-        f = zarr.open(out_file,"a")
-        
-        offset_2d = f[datasets[0]][all_sections[-1]].attrs["offset"]
-
-        for ds in datasets: 
-            if 'stacked' in ds:
-                continue
-            
-            data = np.stack([f[ds][section][:] for section in all_sections],axis=1)
-            
-            f['stacked_'+ds] = data
-            f['stacked_'+ds].attrs["resolution"] = config['voxel_size_3d']
-            f['stacked_'+ds].attrs["offset"] = [0,*offset_2d]
-
-            shutil.rmtree(os.path.join(out_file,ds))
+        shutil.rmtree(os.path.join(out_file,ds))

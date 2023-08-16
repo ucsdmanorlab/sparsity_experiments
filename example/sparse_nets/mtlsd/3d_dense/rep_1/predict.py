@@ -151,7 +151,7 @@ def predict(
 
 if __name__ == "__main__":
 
-    iterations = [5000,10000,15000,20000]
+    iterations = [50000]
     raw_file = os.path.join(setup_dir,"../../../../data/test.zarr")
     raw_ds = "raw"
    

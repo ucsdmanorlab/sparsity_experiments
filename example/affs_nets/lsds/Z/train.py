@@ -400,7 +400,7 @@ def train(
 
     pipeline += gp.Stack(batch_size)
 
-    pipeline += gp.PreCache(cache_size=40, num_workers=10)
+    pipeline += gp.PreCache(cache_size=50, num_workers=20)
 
     pipeline += gp.torch.Train(
         model,

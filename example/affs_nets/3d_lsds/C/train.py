@@ -10,13 +10,10 @@ import zarr
 from lsd.train.gp import AddLocalShapeDescriptor
 from lsd.train import LsdExtractor
 from scipy.ndimage import (
-    binary_dilation,
-    distance_transform_edt,
     gaussian_filter,
-    generate_binary_structure,
-    label
+    maximum_filter
 )
-from skimage.morphology import disk
+from skimage.segmentation import watershed, expand_labels
 from skimage.measure import label
 from model import AffsUNet, WeightedMSELoss
 
@@ -122,7 +119,9 @@ class CreateLabels(gp.BatchFilter):
         labels = np.concatenate([labels,]*anisotropy)
         shape = labels.shape
 
-        # different numbers simulate more or less objects
+        spec = batch[self.labels].spec
+
+        # sample random points
         num_points = random.randint(25,50*anisotropy)
 
         for n in range(num_points):
@@ -131,50 +130,18 @@ class CreateLabels(gp.BatchFilter):
             x = random.randint(1, labels.shape[2] - 1)
 
             labels[z, y, x] = 1
-        
-        structs = [generate_binary_structure(2, 2), disk(random.randint(1,5))]
 
-        #different numbers will simulate larger or smaller objects
-
-        for z in range(labels.shape[0]):
-            
-            dilations = random.randint(1, 10)
-            struct = random.choice(structs)
-
-            dilated = binary_dilation(
-                labels[z], structure=struct, iterations=dilations
-            )
-
-            labels[z] = dilated.astype(labels.dtype)
-
-        #relabel
+        # relabel
         labels = label(labels)
 
-        #expand labels
-        distance = labels.shape[0]
+        # dilate
+        dilations = random.randint(25,40)
+        labels = expand_labels(labels,dilations)
 
-        distances, indices = distance_transform_edt(
-            labels == 0, return_indices=True
-        )
-
-        expanded_labels = np.zeros_like(labels)
-
-        dilate_mask = distances <= distance
-
-        masked_indices = [
-            dimension_indices[dilate_mask] for dimension_indices in indices
-        ]
-
-        nearest_labels = labels[tuple(masked_indices)]
-
-        expanded_labels[dilate_mask] = nearest_labels
-
-        labels = expanded_labels
-
-        #change background
+        # change bg id
         labels[labels == 0] = np.max(labels) + 1
 
-        #relabel
+        # relabel
         labels = label(labels)
 
         batch[self.labels].data = labels[::anisotropy].astype(np.uint64)
@@ -202,40 +169,6 @@ class SmoothLSDs(gp.BatchFilter):
             ).astype(lsds_sec.dtype)
 
         batch[self.lsds].data = lsds
-
-
-class CustomLSDs(AddLocalShapeDescriptor):
-    def __init__(self, segmentation, descriptor, *args, **kwargs):
-
-        super().__init__(segmentation, descriptor, *args, **kwargs)
-
-        self.extractor = LsdExtractor(
-                self.sigma[1:], self.mode, self.downsample
-        )
-
-    def process(self, batch, request):
-
-        labels = batch[self.segmentation].data
-
-        spec = batch[self.segmentation].spec.copy()
-
-        spec.dtype = np.float32
-
-        descriptor = np.zeros(shape=(6, *labels.shape))
-
-        for z in range(labels.shape[0]):
-            labels_sec = labels[z]
-
-            descriptor_sec = self.extractor.get_descriptors(
-                segmentation=labels_sec, voxel_size=spec.voxel_size[1:]
-            )
-
-            descriptor[:, z] = descriptor_sec
-
-        batch = gp.Batch()
-        batch[self.descriptor] = gp.Array(descriptor.astype(spec.dtype), spec)
-
-        return batch
 
 
 def train(
@@ -315,7 +248,7 @@ def train(
     source += gp.Pad(zeros, None)
 
     pipeline = source
-
+    
     pipeline += CreateLabels(zeros,anisotropy)
 
     if input_shape[0] != input_shape[1]:
@@ -332,7 +265,7 @@ def train(
     )
 
     # do this on non eroded labels - that is what predicted lsds will look like
-    pipeline += CustomLSDs(
+    pipeline += AddLocalShapeDescriptor(
         zeros, gt_lsds, sigma=sigma, downsample=2
     )
 
@@ -359,7 +292,7 @@ def train(
     pipeline += gp.Stack(batch_size)
 
     pipeline += gp.PreCache(cache_size=50, num_workers=20)
-
+    
     pipeline += gp.torch.Train(
         model,
         loss,

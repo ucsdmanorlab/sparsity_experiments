@@ -13,11 +13,13 @@ from scipy.ndimage import (
     binary_dilation,
     distance_transform_edt,
     gaussian_filter,
+    maximum_filter,
     generate_binary_structure,
     label
 )
 from skimage.morphology import disk
 from skimage.measure import label
+from skimage.segmentation import watershed, expand_labels
 from model import AffsUNet, WeightedMSELoss
 
 setup_dir = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
@@ -122,62 +124,102 @@ class CreateLabels(gp.BatchFilter):
         labels = np.concatenate([labels,]*anisotropy)
         shape = labels.shape
 
-        # different numbers simulate more or less objects
-        num_points = random.randint(25,50*anisotropy)
+        # random 3d labels generation method
+        choice = random.choice(["a","b","c"])
 
-        for n in range(num_points):
-            z = random.randint(1, labels.shape[0] - 1)
-            y = random.randint(1, labels.shape[1] - 1)
-            x = random.randint(1, labels.shape[2] - 1)
+        if choice == "a":
+            # different numbers simulate more or less objects
+            num_points = random.randint(25,50*anisotropy)
 
-            labels[z, y, x] = 1
-        
-        structs = [generate_binary_structure(2, 2), disk(random.randint(1,5))]
+            for n in range(num_points):
+                z = random.randint(1, labels.shape[0] - 1)
+                y = random.randint(1, labels.shape[1] - 1)
+                x = random.randint(1, labels.shape[2] - 1)
 
-        #different numbers will simulate larger or smaller objects
-
-        for z in range(labels.shape[0]):
+                labels[z, y, x] = 1
             
-            dilations = random.randint(1, 10)
-            struct = random.choice(structs)
+            structs = [generate_binary_structure(2, 2), disk(random.randint(1,5))]
 
-            dilated = binary_dilation(
-                labels[z], structure=struct, iterations=dilations
+            # different numbers will simulate larger or smaller objects
+            for z in range(labels.shape[0]):
+                
+                dilations = random.randint(1, 10)
+                struct = random.choice(structs)
+
+                dilated = binary_dilation(
+                    labels[z], structure=struct, iterations=dilations
+                )
+
+                labels[z] = dilated.astype(labels.dtype)
+
+            # relabel
+            labels = label(labels)
+
+            # expand labels
+            distance = labels.shape[0]
+
+            distances, indices = distance_transform_edt(
+                labels == 0, return_indices=True
             )
 
-            labels[z] = dilated.astype(labels.dtype)
+            expanded_labels = np.zeros_like(labels)
 
-        #relabel
-        labels = label(labels)
+            dilate_mask = distances <= distance
 
-        #expand labels
-        distance = labels.shape[0]
+            masked_indices = [
+                dimension_indices[dilate_mask] for dimension_indices in indices
+            ]
 
-        distances, indices = distance_transform_edt(
-            labels == 0, return_indices=True
-        )
+            nearest_labels = labels[tuple(masked_indices)]
 
-        expanded_labels = np.zeros_like(labels)
+            expanded_labels[dilate_mask] = nearest_labels
 
-        dilate_mask = distances <= distance
+            labels = expanded_labels
 
-        masked_indices = [
-            dimension_indices[dilate_mask] for dimension_indices in indices
-        ]
+            # change background
+            labels[labels == 0] = np.max(labels) + 1
 
-        nearest_labels = labels[tuple(masked_indices)]
+            # relabel
+            labels = label(labels)[::anisotropy].astype(np.uint64)
 
-        expanded_labels[dilate_mask] = nearest_labels
+        elif choice == "b":
+            np.random.seed()
+            peaks = np.random.random(shape).astype(np.float32)
+            peaks = gaussian_filter(peaks, sigma=5.0)
+            max_filtered = maximum_filter(peaks, 10)
+            maxima = max_filtered == peaks
+            seeds = label(maxima,connectivity=1)
+            
+            labels = watershed(1.0 - peaks, seeds)[::anisotropy].astype(np.uint64)
 
-        labels = expanded_labels
+        elif choice == "c":
+            # sample random points
+            num_points = random.randint(25,50*anisotropy)
 
-        #change background
-        labels[labels == 0] = np.max(labels) + 1
+            for n in range(num_points):
+                z = random.randint(1, labels.shape[0] - 1)
+                y = random.randint(1, labels.shape[1] - 1)
+                x = random.randint(1, labels.shape[2] - 1)
 
-        #relabel
-        labels = label(labels)
+                labels[z, y, x] = 1
 
-        batch[self.labels].data = labels[::anisotropy].astype(np.uint64)
+            # relabel
+            labels = label(labels)
+
+            # dilate
+            dilations = random.randint(25,40)
+            labels = expand_labels(labels,dilations)
+
+            # change bg id
+            labels[labels == 0] = np.max(labels) + 1
+
+            # relabel
+            labels = label(labels)[::anisotropy].astype(np.uint64)
+
+        else:
+            raise AssertionError("invalid choice")
+
+        batch[self.labels].data = labels
 
 
 class SmoothLSDs(gp.BatchFilter):
@@ -202,40 +244,6 @@ class SmoothLSDs(gp.BatchFilter):
             ).astype(lsds_sec.dtype)
 
         batch[self.lsds].data = lsds
-
-
-class CustomLSDs(AddLocalShapeDescriptor):
-    def __init__(self, segmentation, descriptor, *args, **kwargs):
-
-        super().__init__(segmentation, descriptor, *args, **kwargs)
-
-        self.extractor = LsdExtractor(
-                self.sigma[1:], self.mode, self.downsample
-        )
-
-    def process(self, batch, request):
-
-        labels = batch[self.segmentation].data
-
-        spec = batch[self.segmentation].spec.copy()
-
-        spec.dtype = np.float32
-
-        descriptor = np.zeros(shape=(6, *labels.shape))
-
-        for z in range(labels.shape[0]):
-            labels_sec = labels[z]
-
-            descriptor_sec = self.extractor.get_descriptors(
-                segmentation=labels_sec, voxel_size=spec.voxel_size[1:]
-            )
-
-            descriptor[:, z] = descriptor_sec
-
-        batch = gp.Batch()
-        batch[self.descriptor] = gp.Array(descriptor.astype(spec.dtype), spec)
-
-        return batch
 
 
 def train(
@@ -332,7 +340,7 @@ def train(
     )
 
     # do this on non eroded labels - that is what predicted lsds will look like
-    pipeline += CustomLSDs(
+    pipeline += AddLocalShapeDescriptor(
         zeros, gt_lsds, sigma=sigma, downsample=2
     )
 

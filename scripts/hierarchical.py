@@ -172,8 +172,10 @@ def post(
         normalize_preds=False,
         min_seed_distance=10,
         merge_function="mean",
+        thresholds=None,
         erode_steps=0,
-        clean_up=0):
+        clean_up=0,
+        **kwargs):
 
     # load
     pred = open_ds(pred_file,pred_dataset)
@@ -183,11 +185,8 @@ def post(
     else:
         roi = pred.roi
 
-    pred = pred.to_ndarray(roi)
-
     # first three channels are direct neighbor affs
-    if len(pred) > 3:
-        pred = pred[:3]
+    pred = pred.to_ndarray(roi)[:3]
     
     # normalize
     pred = (pred / np.max(pred)).astype(np.float32)
@@ -213,8 +212,9 @@ def post(
     # agglomerate
     max_thresh = 1.0
     step = 1/20
-    
-    thresholds = [round(x,2) for x in np.arange(0,max_thresh,step)]
+   
+    if thresholds is None:
+        thresholds = [round(x,2) for x in np.arange(0,max_thresh,step)]
 
     segs = {}
 
@@ -226,19 +226,19 @@ def post(
 
     for threshold,segmentation in zip(thresholds,generator):
        
-        seg = segmentation.copy()
+        #seg = segmentation.copy()
+#
+#        # clean
+#        if clean_up > 0:
+#            seg = remove_small_objects(seg.astype(np.int64),min_size=clean_up)
+#            seg = expand_labels(seg)
+#            seg = label(seg, connectivity=1)
+#
+#        # erode
+#        if erode_steps > 0:
+#            seg = erode(seg,erode_steps)
 
-        # clean
-        if clean_up > 0:
-            seg = remove_small_objects(seg.astype(np.int64),min_size=clean_up)
-            seg = expand_labels(seg)
-            seg = label(seg, connectivity=1)
-
-        # erode
-        if erode_steps > 0:
-            seg = erode(seg,erode_steps)
-
-        segs[threshold] = seg.astype(np.uint64)
+        segs[threshold] = segmentation.copy()#mentation#.astype(np.uint64)
 
     return segs, fragments
 
@@ -251,12 +251,15 @@ if __name__ == "__main__":
     roi = None
     thresh = sys.argv[5]
     merge_fn = sys.argv[6]
+    norm = int(sys.argv[7])
 
     segs,_ = post(
             pred_file,
             pred_dataset,
             roi=roi,
-            merge_function=merge_fn)
+            normalize_preds=bool(norm),
+            merge_function=merge_fn,
+            thresholds=[thresh])
     
     pred = open_ds(pred_file,pred_dataset)
 

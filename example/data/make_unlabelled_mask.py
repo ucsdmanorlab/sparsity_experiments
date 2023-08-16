@@ -11,6 +11,6 @@ labels = f[ds][:]
 
 unlabelled = (labels > 0).astype(np.uint8)
 
-f["unlabelled"] = unlabelled
-f["unlabelled"].attrs["offset"] = f[ds].attrs["offset"]
-f["unlabelled"].attrs["resolution"] = f[ds].attrs["resolution"]
+f[ds.replace("labels","unlabelled")] = unlabelled
+f[ds.replace("labels","unlabelled")].attrs["offset"] = f[ds].attrs["offset"]
+f[ds.replace("labels","unlabelled")].attrs["resolution"] = f[ds].attrs["resolution"]

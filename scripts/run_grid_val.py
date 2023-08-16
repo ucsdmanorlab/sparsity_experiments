@@ -70,17 +70,20 @@ def eval_run(args):
     clean_up = args["clean_up"]
 
     #roi = None
+    if 'test_50000' in pred_file:
+        pred_dataset = 'affs_20000'
 
     #run post
     segs,frags = hierarchical.post(
             pred_file,
             pred_dataset,
-            roi,
-            normalize_preds,
-            min_seed_distance,
-            merge_function,
-            erode_steps,
-            clean_up)
+            roi=roi,
+            normalize_preds=normalize_preds,
+            min_seed_distance=min_seed_distance,
+            merge_function=merge_function,
+            thresholds=None,
+            erode_steps=erode_steps,
+            clean_up=clean_up)
 
     #get roi
     if roi is not None:
@@ -133,7 +136,14 @@ def eval_run(args):
 if __name__ == "__main__":
 
     jsonfile = sys.argv[1]
-    n_workers = int(sys.argv[2])
+    try:
+        n_workers = int(sys.argv[2])
+    except:
+        n_workers = 10
+    try:
+        start_index = int(sys.argv[3])
+    except:
+        start_index = 0
 
     out_dir = jsonfile.split(".")[0]
     os.makedirs(out_dir,exist_ok=True)
@@ -143,12 +153,12 @@ if __name__ == "__main__":
         arguments = json.load(f)
 
     keys, values = zip(*arguments.items())
-    arguments = [dict(zip(keys, v)) for v in itertools.product(*values)]
+    arguments = [dict(zip(keys, v)) for v in itertools.product(*values)][start_index:]
 
     #with multiprocessing.Pool(n_workers,maxtasksperchild=1) as pool:
     with multiprocessing.get_context('spawn').Pool(n_workers,maxtasksperchild=1) as pool:
 
         for i,result in enumerate(tqdm.tqdm(pool.imap(eval_run,arguments), total=len(arguments))):
 
-            with open(os.path.join(out_dir,f"{i}.json"),"w") as f:
+            with open(os.path.join(out_dir,f"{i+start_index}.json"),"w") as f:
                 json.dump(result,f,indent=4)

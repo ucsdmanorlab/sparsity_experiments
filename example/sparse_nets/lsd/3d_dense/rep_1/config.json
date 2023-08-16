@@ -1,5 +1,5 @@
 {
-    "max_iteration": 20001,
+    "max_iteration": 30001,
     "in_channels": 1,
     "output_shapes": [10],
     "fmap_inc_factor": 6,

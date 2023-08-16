@@ -10,13 +10,10 @@ import zarr
 from lsd.train.gp import AddLocalShapeDescriptor
 from lsd.train import LsdExtractor
 from scipy.ndimage import (
-    binary_dilation,
-    distance_transform_edt,
     gaussian_filter,
-    generate_binary_structure,
-    label
+    maximum_filter
 )
-from skimage.morphology import disk
+from skimage.segmentation import watershed
 from skimage.measure import label
 from model import AffsUNet, WeightedMSELoss
 
@@ -92,7 +89,7 @@ class ZerosSource(gp.BatchProvider):
                 dataset_roi - self.spec[array_key].roi.get_offset() / voxel_size
             )
 
-
+            
             # create array spec
             array_spec = self.spec[array_key].copy()
             array_spec.roi = request_spec.roi
@@ -117,67 +114,17 @@ class CreateLabels(gp.BatchFilter):
 
     def process(self, batch, request):
 
-        labels = batch[self.labels].data
         anisotropy = random.choice(range(self.anisotropy)) + 1
-        labels = np.concatenate([labels,]*anisotropy)
-        shape = labels.shape
+        size = np.concatenate([batch[self.labels].data,]*anisotropy).shape
 
-        # different numbers simulate more or less objects
-        num_points = random.randint(25,50*anisotropy)
-
-        for n in range(num_points):
-            z = random.randint(1, labels.shape[0] - 1)
-            y = random.randint(1, labels.shape[1] - 1)
-            x = random.randint(1, labels.shape[2] - 1)
-
-            labels[z, y, x] = 1
+        np.random.seed()
+        peaks = np.random.random(size).astype(np.float32)
+        peaks = gaussian_filter(peaks, sigma=5.0)
+        max_filtered = maximum_filter(peaks, 10)
+        maxima = max_filtered == peaks
+        seeds = label(maxima,connectivity=1)
         
-        structs = [generate_binary_structure(2, 2), disk(random.randint(1,5))]
-
-        #different numbers will simulate larger or smaller objects
-
-        for z in range(labels.shape[0]):
-            
-            dilations = random.randint(1, 10)
-            struct = random.choice(structs)
-
-            dilated = binary_dilation(
-                labels[z], structure=struct, iterations=dilations
-            )
-
-            labels[z] = dilated.astype(labels.dtype)
-
-        #relabel
-        labels = label(labels)
-
-        #expand labels
-        distance = labels.shape[0]
-
-        distances, indices = distance_transform_edt(
-            labels == 0, return_indices=True
-        )
-
-        expanded_labels = np.zeros_like(labels)
-
-        dilate_mask = distances <= distance
-
-        masked_indices = [
-            dimension_indices[dilate_mask] for dimension_indices in indices
-        ]
-
-        nearest_labels = labels[tuple(masked_indices)]
-
-        expanded_labels[dilate_mask] = nearest_labels
-
-        labels = expanded_labels
-
-        #change background
-        labels[labels == 0] = np.max(labels) + 1
-
-        #relabel
-        labels = label(labels)
-
-        batch[self.labels].data = labels[::anisotropy].astype(np.uint64)
+        batch[self.labels].data = watershed(1.0 - peaks, seeds)[::anisotropy].astype(np.uint64)
 
 
 class SmoothLSDs(gp.BatchFilter):
@@ -202,40 +149,6 @@ class SmoothLSDs(gp.BatchFilter):
             ).astype(lsds_sec.dtype)
 
         batch[self.lsds].data = lsds
-
-
-class CustomLSDs(AddLocalShapeDescriptor):
-    def __init__(self, segmentation, descriptor, *args, **kwargs):
-
-        super().__init__(segmentation, descriptor, *args, **kwargs)
-
-        self.extractor = LsdExtractor(
-                self.sigma[1:], self.mode, self.downsample
-        )
-
-    def process(self, batch, request):
-
-        labels = batch[self.segmentation].data
-
-        spec = batch[self.segmentation].spec.copy()
-
-        spec.dtype = np.float32
-
-        descriptor = np.zeros(shape=(6, *labels.shape))
-
-        for z in range(labels.shape[0]):
-            labels_sec = labels[z]
-
-            descriptor_sec = self.extractor.get_descriptors(
-                segmentation=labels_sec, voxel_size=spec.voxel_size[1:]
-            )
-
-            descriptor[:, z] = descriptor_sec
-
-        batch = gp.Batch()
-        batch[self.descriptor] = gp.Array(descriptor.astype(spec.dtype), spec)
-
-        return batch
 
 
 def train(
@@ -308,14 +221,14 @@ def train(
         },
         shape=input_shape,
         array_specs={
-            zeros: gp.ArraySpec(interpolatable=False, voxel_size=voxel_size),
+            zeros: gp.ArraySpec(interpolatable=False,voxel_size=voxel_size),
         },
     )
 
     source += gp.Pad(zeros, None)
 
     pipeline = source
-
+    
     pipeline += CreateLabels(zeros,anisotropy)
 
     if input_shape[0] != input_shape[1]:
@@ -332,13 +245,13 @@ def train(
     )
 
     # do this on non eroded labels - that is what predicted lsds will look like
-    pipeline += CustomLSDs(
+    pipeline += AddLocalShapeDescriptor(
         zeros, gt_lsds, sigma=sigma, downsample=2
     )
 
     # add random noise
     pipeline += gp.NoiseAugment(gt_lsds)
-    
+
     pipeline += gp.IntensityAugment(gt_lsds, 0.9, 1.1, -0.1, 0.1)
 
     # smooth the batch by different sigmas to simulate noisy predictions
@@ -368,8 +281,8 @@ def train(
         loss_inputs={0: pred_affs, 1: gt_affs, 2: affs_weights},
         outputs={0: pred_affs},
         save_every=1000,
+        checkpoint_basename=os.path.join(setup_dir,'model'),
         log_dir=os.path.join(setup_dir,'log'),
-        checkpoint_basename=os.path.join(setup_dir,'model')
     )
 
     pipeline += gp.Squeeze([gt_lsds,gt_affs,pred_affs])

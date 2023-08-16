@@ -1,6 +1,3 @@
-import time
-import subprocess
-from multiprocessing import Pool
 import json
 import re
 import shutil
@@ -20,26 +17,12 @@ from model import MtlsdModel
 
 setup_dir = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
 
-iterations = [5000,10000,15000,20000]
-raw_file = os.path.join(setup_dir,"../../../../data/2d_test.zarr")
-raw_ds = "raw"
-
-def natural_sort(l): 
-    convert = lambda text: int(text) if text.isdigit() else text.lower() 
-    alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)] 
-    return sorted(l, key=alphanum_key)
-
-all_sections = [x for x in os.listdir(os.path.join(raw_file,raw_ds)) if '.' not in x]
-all_sections = natural_sort(all_sections)
-
-out_file = os.path.join(setup_dir,os.path.basename(raw_file))
-    
 with open(os.path.join(setup_dir, 'config.json'), 'r') as f:
     config = json.load(f)
 
 out_shapes = config["output_shapes"]
 
-increase = gp.Coordinate([8 * 12] * 2)
+increase = gp.Coordinate([16, 8*12, 8*12])
 input_shape = gp.Coordinate(tuple(config['input_shape'])) + increase
 output_shape = gp.Coordinate(tuple(config['output_shape'])) + increase
 
@@ -56,10 +39,8 @@ def predict(
         raw_dataset,
         out_file):
 
-    section = int(raw_dataset.split('/')[-1])
-
-    lsds_out_ds = f"lsds_{iteration}/{section}"
-    affs_out_ds = f"affs_{iteration}/{section}"
+    lsds_out_ds = f"lsds_{iteration}"
+    affs_out_ds = f"affs_{iteration}"
 
     raw = gp.ArrayKey('RAW')
     pred_lsds = gp.ArrayKey('PRED_LSDS')
@@ -83,20 +64,20 @@ def predict(
     with gp.build(source):
         total_input_roi = source.spec[raw].roi
         total_output_roi = source.spec[raw].roi.grow(-context,-context)
-
-    prepare_ds(
-            out_file,
-            lsds_out_ds,
-            daisy.Roi(
-                total_output_roi.get_offset(),
-                total_output_roi.get_shape()
-            ),
-            voxel_size,
-            np.uint8,
-            write_size=output_size,
-            compressor={'id': 'blosc', 'clevel': 3},
-            delete=True,
-            num_channels=out_shapes[0])
+#
+#    prepare_ds(
+#            out_file,
+#            lsds_out_ds,
+#            daisy.Roi(
+#                total_output_roi.get_offset(),
+#                total_output_roi.get_shape()
+#            ),
+#            voxel_size,
+#            np.uint8,
+#            write_size=output_size,
+#            compressor={'id': 'blosc', 'clevel': 3},
+#            delete=True,
+#            num_channels=out_shapes[0])
 
     prepare_ds(
             out_file,
@@ -137,7 +118,7 @@ def predict(
 
     write = gp.ZarrWrite(
             dataset_names={
-                pred_lsds: lsds_out_ds,
+#                pred_lsds: lsds_out_ds,
                 pred_affs: affs_out_ds
             },
             store=out_file)
@@ -150,8 +131,9 @@ def predict(
             gp.Unsqueeze([raw]) +
             gp.Unsqueeze([raw]) +
             predict +
-            gp.Squeeze([pred_lsds,pred_affs]) +
-            gp.IntensityScaleShift(pred_lsds, 255, 0) +
+#            gp.Squeeze([pred_lsds]) +
+            gp.Squeeze([pred_affs]) +
+#            gp.IntensityScaleShift(pred_lsds, 255, 0) +
             gp.IntensityScaleShift(pred_affs, 255, 0) +
             write+
             scan)
@@ -159,7 +141,7 @@ def predict(
     predict_request = gp.BatchRequest()
 
     predict_request[raw] = total_input_roi
-    predict_request[pred_lsds] = total_output_roi
+#    predict_request[pred_lsds] = total_output_roi
     predict_request[pred_affs] = total_output_roi
 
     with gp.build(pipeline):
@@ -168,50 +150,18 @@ def predict(
     return total_output_roi
 
 
-def worker(worker_id):
-    # time delay for workers
-    time.sleep(5*worker_id)
+if __name__ == "__main__":
 
-    # set GPU ID
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_id)
-
-    sections = all_sections[worker_id::num_gpus]
+    iterations = [50000]
+    raw_file = os.path.join(setup_dir,"../../../data/train.zarr")
+    raw_ds = "raw"
+   
+    out_file = os.path.join(setup_dir,os.path.basename(raw_file))
     
-    print(f"GPU ID:{worker_id} predicting on sections: {sections}")
-
     for iteration in iterations:
-        for section in sections: 
-
-            raw_dataset = f'{raw_ds}/{section}'
 
             predict(
                 iteration,
                 raw_file,
-                raw_dataset,
+                raw_ds,
                 out_file)
-
-
-if __name__ == "__main__":
-
-    print(f"Starting inference on {out_file}")
-    num_gpus = 3
-
-    with Pool(num_gpus) as pool:
-        pool.map(worker, range(num_gpus))
-    
-    print("All subprocesses completed.")
-
-    #stack 2d to 3d
-    datasets = [x for x in os.listdir(out_file) if ('stacked' not in x and '.' not in x)]
-    f = zarr.open(out_file,"a")
-    
-    offset_2d = f[datasets[0]][all_sections[-1]].attrs["offset"]
-
-    for ds in datasets: 
-        data = np.stack([f[ds][section][:] for section in all_sections],axis=1)
-        
-        f['stacked_'+ds] = data
-        f['stacked_'+ds].attrs["resolution"] = config['voxel_size_3d']
-        f['stacked_'+ds].attrs["offset"] = [0,*offset_2d]
-
-        shutil.rmtree(os.path.join(out_file,ds))
