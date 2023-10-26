@@ -69,9 +69,10 @@ if __name__ == "__main__":
     print("making arguments")
     #get all arguments
     arguments = []
-    for d in ["fib25"]:
+    for d in ["voljo"]:
         for n in b[d]:
             for s in b[d][n]:
+            #for s in ["3d_dense"]:
                 for r in b[d][n][s]:
                     
                     res = b[d][n][s][r]
@@ -82,7 +83,8 @@ if __name__ == "__main__":
                     p = n.split('_')[0] #pred
                     
                     arg = default.copy()
-                    
+                   
+
                     if s != '3d_dense':
                         arg["pred_file"] = f"/scratch/04101/vvenu/sparsity_experiments/{d}/affs_nets/{p}/{res['gt_type']}/2d_test.zarr"
                         arg["pred_dataset"] = f"{n_}/{s}/{r}/3d_affs_{a_i}_from_stacked_{p}_{p_i}"
@@ -107,5 +109,5 @@ if __name__ == "__main__":
 #    for arg in arguments:
 #        make_seg(arg)
 
-    with mp.get_context('spawn').Pool(16,maxtasksperchild=1) as pool:
+    with mp.get_context('spawn').Pool(2,maxtasksperchild=1) as pool:
         pool.map(make_seg,arguments[::-1])

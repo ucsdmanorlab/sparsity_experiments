@@ -275,6 +275,7 @@ if __name__ == "__main__":
             out_ds,
             roi,
             pred.voxel_size,
-            np.uint64)
+            np.uint64,
+            delete=True)
 
     out_seg[roi] = segs[float(thresh)]

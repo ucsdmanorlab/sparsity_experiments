@@ -46,14 +46,11 @@ def evaluate(
     metrics = rand_voi(
         labels,
         seg,
-        return_cluster_scores=False)
+        return_cluster_scores=True)
 
     metrics['merge_threshold'] = thresh
     metrics['voi_sum'] = metrics['voi_split']+metrics['voi_merge']
     metrics['nvi_sum'] = metrics['nvi_split']+metrics['nvi_merge']
-
-    for k in {'voi_split_i', 'voi_merge_j'}:
-        del metrics[k]
 
     return metrics
 
