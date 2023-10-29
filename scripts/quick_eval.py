@@ -66,7 +66,7 @@ if __name__ == "__main__":
     #load labels, seg, labels_mask
     labels = open_ds(labels_file,labels_ds)
     seg = open_ds(seg_file,seg_ds)
-    roi = seg.roi
+    roi = seg.roi.intersect(labels.roi)
 
     if labels_mask:
         mask = open_ds(labels_file,"labels_mask")

@@ -12,7 +12,7 @@ from funlib.evaluate import rand_voi
 import hierarchical
 
 
-def evaluate(
+def compute_rand_voi(
     seg,
     labels,
     mask=None,
@@ -104,14 +104,124 @@ def eval_run(arg_tuple):
     else:
         mask = None
 
+    # get gt skeletons
+    skeletons = get_skeletons(labels,roi)
+
+    # TODO: remove outside nodes and edges
+
+    site_ids = np.array([
+        n
+        for n in skeletons.nodes()
+    ], dtype=np.uint64)
+
+    site_component_ids = np.array([
+        data['component_id']
+        for _, data in skeletons.nodes(data=True)
+    ])
+
+    site_component_ids = site_component_ids.astype(np.uint64)
+    number_of_components = np.unique(site_component_ids).size
+
+    skeleton_lengths = get_skeleton_lengths(
+            skeletons,
+            skeleton_position_attributes=['z', 'y', 'x'],
+            skeleton_id_attribute='component_id',
+            store_edge_length='length')
+    total_length = np.sum([l for _, l in skeleton_lengths.items()])
+
+    # prepare fragments
+    site_fragment_lut, num_bg_sites = get_site_fragment_lut(fragments,site_ids)
+
+    site_fragment_lut = {
+        site: fragment
+        for site, fragment in zip(
+            site_fragment_lut[0],
+            site_fragment_lut[1])
+    }
+
+    site_fragment_ids = np.array([
+        site_fragment_lut[s] if s in site_fragment_lut else 0
+        for s in site_ids
+    ], dtype=np.uint64)
+
     #evaluate thresholds
     results = {}
     
     for thresh, seg in segs.items():
+        
+        site_segment_ids, fragment_segment_lut = get_site_segment_ids(
+                seg,
+                site_ids,
+                site_fragment_ids
+        )
+        
+        number_of_segments = np.unique(site_segment_ids).size
 
-        metrics = evaluate(seg,labels,mask,thresh)
+        # compute ERL, get split-merge stats
+        erl, max_erl, split_stats, merge_stats = compute_expected_run_length(
+                skeletons,
+                site_ids,
+                site_segment_ids,
+                skeleton_lengths)
+
+        number_of_split_skeletons = len(split_stats)
+        number_of_merging_segments = len(merge_stats)
+
+        print('ERL: ', erl)
+        print('Max ERL: ', max_erl)
+        print('Total path length: ', total_length)
+
+        normalized_erl = erl/max_erl
+        print('Normalized ERL: ', normalized_erl)
+
+        # compute mincut metric
+        splits_needed, merges_needed, unsplittable_fragments = \
+            compute_splits_merges_needed(
+                skeletons,
+                site_ids,
+                site_component_ids,
+                site_fragment_ids,
+                fragment_segment_lut,
+                site_segment_ids,
+                split_stats,
+                merge_stats,
+                threshold)
+
+        average_splits_needed = splits_needed/number_of_segments
+        average_merges_needed = merges_needed/number_of_components
+        print(
+                'Number of splits needed: ', splits_needed, '\n',
+                'Number of merges needed: ', merges_needed, '\n',
+                'Number of background sites: ', num_bg_sites, '\n',
+                'Average splits needed: ', average_splits_needed, '\n',
+                'Average merges needed: ', average_merges_needed, '\n',
+                'Number of unsplittable fragments: ', len(unsplittable_fragments)
+            )
+
+        # compute RAND VOI
+        metrics = compute_rand_voi(seg,labels,mask,thresh)
+
+        metrics['expected_run_length'] = erl
+        metrics['max_erl'] = max_erl
+        metrics['total path length'] = total_length
+        metrics['normalized_erl'] = normalized_erl
+        metrics['number_of_segments'] = number_of_segments
+        metrics['number_of_components'] = number_of_components
+        metrics['number_of_merging_segments'] = number_of_merging_segments
+        metrics['number_of_split_skeletons'] = number_of_split_skeletons
+
+        metrics['total_splits_needed_to_fix_merges'] = splits_needed
+        metrics['average_splits_needed_to_fix_merges'] = average_splits_needed
+        metrics['total_merges_needed_to_fix_splits'] = merges_needed
+        metrics['average_merges_needed_to_fix_splits'] = average_merges_needed
+        metrics['number_of_unsplittable_fragments'] = len(unsplittable_fragments)
+        metrics['number_of_background_sites'] = num_bg_sites
+
+        metrics['merge_stats'] = merge_stats
+        metrics['split_stats'] = split_stats
+
         results[thresh] = metrics
-
+    
     del segs
     gc.collect()
 
