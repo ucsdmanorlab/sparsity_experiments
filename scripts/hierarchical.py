@@ -224,31 +224,35 @@ def segment(
 
     # agglomerate
     max_thresh = 0.8
-    step = 1/50
+    step = 1/20
    
     if thresholds is None:
-        thresholds = [round(x,2) for x in np.arange(0,max_thresh,step)]
+        thresholds = [round(x,2) for x in np.arange(0.3,max_thresh,step)]
 
     segs = {}
+    rags = {}
 
     print("agglomerating")
     generator = waterz.agglomerate(
             pred,
             thresholds=thresholds,
             fragments=fragments.copy(),
-            scoring_function=waterz_merge_function[merge_function])
+            scoring_function=waterz_merge_function[merge_function],
+            return_region_graph=True)
 
-    for threshold,segmentation in zip(thresholds,generator):
+    for threshold,res in zip(thresholds,generator):
        
-        seg = segmentation.copy()
+        seg = res[0].copy()
+        rag = res[1]
 
         # clean
         if rso > 0:
             seg = remove_small_objects(seg.astype(np.int64),min_size=rso)
 
         segs[threshold] = seg.astype(np.uint64)
+        rags[threshold] = rag
 
-    return segs, fragments
+    return segs, rags, fragments
 
 
 if __name__ == "__main__":
@@ -281,7 +285,7 @@ if __name__ == "__main__":
         filter_val = 0.0
         rso = 0
     
-    segs = segment(
+    segs,_,_ = segment(
             pred_file,
             pred_dataset,
             roi=roi,
