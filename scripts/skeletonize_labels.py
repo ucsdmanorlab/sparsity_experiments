@@ -37,7 +37,7 @@ def skeletonize(
             # object_ids=[ ... ], # process only the specified labels
             # extra_targets_before=[ (27,33,100), (44,45,46) ], # target points in voxels
             # extra_targets_after=[ (27,33,100), (44,45,46) ], # target points in voxels
-            dust_threshold=100, # skip connected components with fewer than this many voxels
+            dust_threshold=25, # skip connected components with fewer than this many voxels
             anisotropy=vs, # default True
             fix_branching=True, # default True
             fix_borders=True, # default True
@@ -71,7 +71,7 @@ def convert_to_nx(skels,roi):
     node_offset = 0
 
     offset = roi.offset
-        
+
     for skel in skels:
         
         skeleton = skels[skel]
@@ -98,15 +98,16 @@ def convert_to_nx(skels,roi):
 
 if __name__ == '__main__':
 
-    vols = ["cremi_a","cremi_b","cremi_c"]#,"epi","fib25","voljo"]
+    vols = ["cremi_a","cremi_b","cremi_c","epi","fib25","voljo"]
     fs = [f"/scratch/04101/vvenu/sparsity_experiments/{x}/data/train.zarr" for x in vols]
 
     for v in vols[::-1]:
-        for s in [0,0.5,1.0,1.5,2.0,3.0,4.0]:
-            for c in [0,100,200,300,400,500,750,1000]:
+        for s in [0.5]:
+            for c in [300]:
 
                 f = f"/scratch/04101/vvenu/sparsity_experiments/{v}/data/train.zarr"
                 affs_f = f"/scratch/04101/vvenu/sparsity_experiments/{v}/bootstrapped_nets/affs-2d_dense/rep_3/train.zarr"
+                labels_ds = "labels"
 
                 params={
                     "scale": s, 
@@ -123,7 +124,7 @@ if __name__ == '__main__':
                 print("starting on ",f)
                 print(f"scale={s}, const={c}")
 
-                skels = skeletonize(f,"labels",affs_f,params)
+                skels = skeletonize(f,labels_ds,affs_f,params)
 
                 out_f = f"/scratch/04101/vvenu/sparsity_experiments/{v}/data/train_skels/n{len(skels[1])}_{skels[0]}_s{s}_c{c}.graphml"
                 os.makedirs(os.path.dirname(out_f), exist_ok=True)

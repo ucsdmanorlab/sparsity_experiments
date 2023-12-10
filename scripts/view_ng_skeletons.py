@@ -88,7 +88,7 @@ with viewer.txn() as s:
             name="labels",
             layer=neuroglancer.SegmentationLayer(
                 source=neuroglancer.LocalVolume(
-                        data=labels,
+                        data=labels[:],
                         dimensions=dims,
                         voxel_offset=[x/y for x,y in zip(labels.attrs["offset"],vs)],
                     ),

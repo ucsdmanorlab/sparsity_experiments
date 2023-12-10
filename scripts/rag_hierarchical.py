@@ -2,20 +2,25 @@ import json
 import sys
 import os
 import numpy as np
+from pathlib import Path
+import networkx as nx
 
-from funlib.persistence import open_ds, prepare_ds
-from funlib.geometry import Coordinate,Roi
-from funlib.segment.arrays import replace_values
-
-from scipy.ndimage import measurements
+from scipy.ndimage import measurements, center_of_mass
 from scipy.ndimage import maximum_filter
 from scipy.ndimage import distance_transform_edt
 from scipy.ndimage import binary_erosion
 from skimage.measure import label
-from skimage.morphology import remove_small_objects
+
+import zarr
+from funlib.persistence import open_ds, prepare_ds
+from funlib.persistence.graphs import SQLiteGraphDataBase
+from funlib.geometry import Coordinate,Roi
+from funlib.segment.arrays import replace_values, relabel
+from funlib.segment.graphs import find_connected_components
+
 import mahotas
 import waterz
-import zarr
+from lsd.post.merge_tree import MergeTree
 
 
 waterz_merge_function = {
@@ -177,7 +182,6 @@ def segment(
         filter_fragments_value=0.5,
         merge_function="mean",
         thresholds=None,
-        rso=0,
         **kwargs):
 
     # load
@@ -188,6 +192,8 @@ def segment(
         roi = Roi(roi[0],roi[1])
     else:
         roi = pred.roi
+
+    vs = pred.voxel_size
 
     # first three channels are direct neighbor affs
     pred = pred.to_ndarray(roi)[:3]
@@ -223,34 +229,90 @@ def segment(
         print("filtering fragments")
         fragments = filter_fragments(fragments, pred, filter_value=filter_fragments_value)
 
+    fragment_ids = range(0,np.max(fragments))
+
+    # get fragment centers
+    fragment_centers = {
+        fragment: roi.get_offset() + vs*Coordinate(center)
+        for fragment, center in zip(
+            fragment_ids,
+            center_of_mass(fragments, fragments, fragment_ids))
+        if not np.isnan(center[0])
+    }
+
+    # store nodes
+    rag = nx.Graph()
+    rag.add_nodes_from([
+        (node, {
+            'position_z': c[0],
+            'position_y': c[1],
+            'position_x': c[2]
+            }
+        )
+        for node, c in fragment_centers.items()
+    ])
+
+    # relabel fragments
+    fragments_relabelled, n, fragment_relabel_map = relabel(
+        fragments,
+        return_backwards_map=True)
+
     # agglomerate
-    max_thresh = 0.8
-    step = 1/20
-   
-    if thresholds is None:
-        thresholds = [round(x,2) for x in np.arange(0.3,max_thresh,step)]
-
-    segs = {}
-
     print("agglomerating")
     generator = waterz.agglomerate(
             pred,
-            thresholds=thresholds,
-            fragments=fragments.copy(),
+            thresholds=[0,1.0],
+            fragments=fragments_relabelled.copy(),
             scoring_function=waterz_merge_function[merge_function],
+            return_merge_history=True,
+            return_region_graph=True,
             )
 
-    for threshold,res in zip(thresholds,generator):
-       
-        seg = res.copy()
+    # get fragment neighbors
+    _, _, initial_rag = next(generator)
+    for edge in initial_rag:
+        u, v = fragment_relabel_map[edge['u']], fragment_relabel_map[edge['v']]
+        rag.add_edge(u, v, merge_score=None, agglomerated=True)
 
-        # clean
-        if rso > 0:
-            seg = remove_small_objects(seg.astype(np.int64),min_size=rso)
+    #_, merge_rag = next(generator)
+    _, merge_history, _ = next(generator)
 
-        segs[threshold] = seg.astype(np.uint64)
+    # cleanup generator
+    for _, _, _ in generator:
+        pass
 
-    return segs, fragments
+    # create a merge tree from the merge history
+    merge_tree = MergeTree(fragment_relabel_map)
+    for merge in merge_history:
+
+        a, b, c, score = merge['a'], merge['b'], merge['c'], merge['score']
+        merge_tree.merge(
+            fragment_relabel_map[a],
+            fragment_relabel_map[b],
+            fragment_relabel_map[c],
+            score)
+
+    # mark edges in original RAG with score at time of merging
+    num_merged = 0
+    for u, v, data in rag.edges(data=True):
+        merge_score = merge_tree.find_merge(u, v)
+        data['merge_score'] = merge_score
+
+    # find segments
+    luts = {}
+    if thresholds is None:
+        thresholds = [round(i,2) for i in np.arange(0.25,0.85,0.05)]
+
+    for thresh in thresholds:
+        print(f"finding segments for {thresh}")
+        luts[thresh] = find_connected_components(
+                rag,
+                node_component_attribute='segment_id',
+                edge_score_attribute='merge_score',
+                edge_score_threshold=thresh,
+                return_lut=True)
+
+    return luts, fragments, rag
 
 
 if __name__ == "__main__":
@@ -259,8 +321,11 @@ if __name__ == "__main__":
     pred_dataset = sys.argv[2]
     out_file = sys.argv[3]
     out_ds = sys.argv[4]
+    rag_path = "SKEL/rag.db" #sys.argv[5]
+    lut_file = f"SKEL/luts.json"
    
     raw_file = "/scratch/04101/vvenu/sparsity_experiments/voljo/data/train.zarr"
+    #raw_file = "SKEL/test.zarr"
     labels_dataset = "labels"
 
     pred = open_ds(pred_file,pred_dataset)
@@ -276,18 +341,16 @@ if __name__ == "__main__":
         bg_mask = bool(int(sys.argv[9]))
         mask_thresh = float(sys.argv[10])
         filter_val = float(sys.argv[11])
-        rso = int(sys.argv[12])
     except:
-        thresh = 0.95
+        thresh = 0.5
         merge_fn = "hist_quant_75"
         norm = False
         min_seed = 10
         bg_mask = False
         mask_thresh = 0.5
         filter_val = 0.0
-        rso = 0
     
-    segs,frags = segment(
+    luts,frags,rag = segment(
             pred_file,
             pred_dataset,
             roi=[tuple(roi.offset),tuple(roi.shape)],
@@ -297,8 +360,7 @@ if __name__ == "__main__":
             mask_thresh=mask_thresh,
             filter_fragments_value=filter_val,
             merge_function=merge_fn,
-            thresholds=[thresh],
-            rso=rso)
+            thresholds=None)
     
     out_seg = prepare_ds(
             out_file,
@@ -316,7 +378,28 @@ if __name__ == "__main__":
             delete=True,
             dtype=np.uint64)
 
-    print("writing")
-
-    out_seg[roi] = segs[float(thresh)].astype(np.uint64)
+    print("writing seg")
     out_frags[roi] = frags
+
+    lut = np.vectorize(luts[thresh].get)
+    seg = lut(frags)
+    out_seg[roi] = seg.astype(np.uint64)
+    
+    print("writing rag")
+    nx.write_graphml(rag, rag_path)
+#    rag_provider = SQLiteGraphDataBase(
+#            Path(rag_path),
+#            position_attributes=["position_z", "position_y", "position_x"])
+#    rag_provider.write_graph(rag, roi)
+
+    print("writing luts")    
+    def convert_dict(d):
+        if isinstance(d, dict):
+            return {int(k) if isinstance(k, np.uint64) else k: convert_dict(v) for k, v in d.items()}
+        elif isinstance(d, np.uint64):
+            return int(d)
+        else:
+            return d
+
+    with open(lut_file, "w") as f:
+        json.dump(convert_dict(luts),f,indent=4)
