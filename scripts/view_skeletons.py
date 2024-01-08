@@ -62,9 +62,8 @@ def add_skeletons_from_file(f):
             continue
 
         nodes.append(
-                neuroglancer.EllipsoidAnnotation(
-                    center=pos_u,
-                    radii=(1,5,5),
+                neuroglancer.PointAnnotation(
+                    point=pos_u,
                     id=next(ngid),
                     )
                 )

@@ -2,7 +2,6 @@ import sys
 import json
 import os
 import multiprocessing as mp
-import concurrent.futures
 import tqdm
 import itertools
 import gc
@@ -14,6 +13,16 @@ from funlib.geometry import Coordinate,Roi
 from funlib.evaluate import rand_voi, expected_run_length, split_graph
 from rag_hierarchical import segment
 from evaluate import EvaluateAnnotations, get_site_fragment_lut
+
+
+def convert_dtypes(d):
+    if isinstance(d, dict):
+        return {k: convert_dtypes(v) for k, v in d.items()}
+    elif isinstance(d, (np.int64, np.uint64, np.int32, np.uint32)):
+        return int(d)
+    elif isinstance(d, (np.float64, np.float32, np.float16)):
+        return float(d)
+    return d
 
 
 def eval_run(arg_tuple):
@@ -48,37 +57,30 @@ def eval_run(arg_tuple):
 
     voxel_size = open_ds(raw_file,labels_dataset).voxel_size
 
-    #run post
-    luts, frags, rag = segment(
-            pred_file,
-            pred_dataset,
-            roi=[tuple(roi.offset),tuple(roi.shape)],
-            normalize_preds=normalize_preds,
-            min_seed_distance=min_seed_distance,
-            background_mask=background_mask,
-            mask_thresh=mask_thresh,
-            filter_fragments_value=filter_fragments_value,
-            merge_function=merge_function,
-            thresholds=None)
-
     roi_offset = roi.get_offset()
     roi_shape = roi.get_shape()
     compute_mincut_metric = True 
-    skel_file = raw_file[:-5]+"_skel.graphml"
 
-    #evaluate
+    frags_file = pred_file 
+    frags_str = f"{pred_dataset}_{normalize_preds}Norm_{background_mask}BoundaryMask{int(100*mask_thresh)}_{min_seed_distance}MinSeedDist_{int(100*filter_fragments_value)}FragFilter"
+    frags_ds = f"repost/{frags_str}/fragments"
+    edges_table = "edges_"+merge_function
+    rag_path = os.path.join(frags_file,"repost",frags_str,"rag.db")
+    lut_dir = os.path.join(os.path.dirname(rag_path),"luts",merge_function)
+
+    # evaluate
     evaluate = EvaluateAnnotations(
-            raw_file,
-            labels_dataset,
-            luts,
-            frags,
-            rag,
-            skel_file,
+            frags_file,
+            frags_ds,
+            rag_path,
+            edges_table,
+            lut_dir,
             roi_offset,
             roi_shape,
             compute_mincut_metric)
     
     results = evaluate.evaluate()
+    results = convert_dtypes(results)
 
     #get best result
     best_nvi_thresh = sorted([(results[thresh]['nvi_sum'],thresh) for thresh in results.keys()])
@@ -87,13 +89,6 @@ def eval_run(arg_tuple):
         for thresh in results.keys()
     ])
     
-    try:
-        best_nvi_thresh = best_nvi_thresh[0][1]
-        best_edits_thresh = best_edits_thresh[0][1]
-    except:
-        print(results)
-        print(args)
-
     ret = args | {"best_nvi": results[best_nvi_thresh]} | {"best_edits": results[best_edits_thresh]}
     return idx, ret
 
@@ -127,9 +122,15 @@ if __name__ == "__main__":
     missing_indices = list(set(total_indices) - set(existing_outputs))
     missing_arg_tuples = [(idx, arguments[idx]) for idx in missing_indices]
 
-    with mp.get_context('spawn').Pool(n_workers,maxtasksperchild=1) as pool:
+    for arg_tuple in missing_arg_tuples:
+        i,result = eval_run(arg_tuple)
+        print(arg_tuple, i, result["best_nvi"]["nvi_sum"])
+        with open(os.path.join(out_dir,f"{i}.json"),"w") as f:
+            json.dump(result,f,indent=4)
 
-        for i,result in tqdm.tqdm(pool.imap(eval_run,missing_arg_tuples), total=len(missing_arg_tuples)):
-
-            with open(os.path.join(out_dir,f"{i}.json"),"w") as f:
-                json.dump(result,f,indent=4)
+#    with mp.get_context('spawn').Pool(n_workers,maxtasksperchild=1) as pool:
+#
+#        for i,result in tqdm.tqdm(pool.imap(eval_run,missing_arg_tuples), total=len(missing_arg_tuples)):
+#
+#            with open(os.path.join(out_dir,f"{i}.json"),"w") as f:
+#                json.dump(result,f,indent=4)

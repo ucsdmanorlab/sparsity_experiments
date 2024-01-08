@@ -15,27 +15,11 @@ import zarr
 from funlib.persistence import open_ds, prepare_ds
 from funlib.persistence.graphs import SQLiteGraphDataBase
 from funlib.geometry import Coordinate,Roi
-from funlib.segment.arrays import replace_values, relabel
-from funlib.segment.graphs import find_connected_components
+from funlib.segment.arrays import replace_values
 
 import mahotas
 import waterz
-from lsd.post.merge_tree import MergeTree
 
-
-waterz_merge_function = {
-    'hist_quant_10': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 10, ScoreValue, 256, false>>',
-    'hist_quant_10_initmax': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 10, ScoreValue, 256, true>>',
-    'hist_quant_25': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 25, ScoreValue, 256, false>>',
-    'hist_quant_25_initmax': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 25, ScoreValue, 256, true>>',
-    'hist_quant_50': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 50, ScoreValue, 256, false>>',
-    'hist_quant_50_initmax': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 50, ScoreValue, 256, true>>',
-    'hist_quant_75': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 75, ScoreValue, 256, false>>',
-    'hist_quant_75_initmax': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 75, ScoreValue, 256, true>>',
-    'hist_quant_90': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 90, ScoreValue, 256, false>>',
-    'hist_quant_90_initmax': 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 90, ScoreValue, 256, true>>',
-    'mean': 'OneMinus<MeanAffinity<RegionGraphType, ScoreValue>>',
-}
 
 def filter_fragments(fragments, affs, max_affinity_value=1.0,
         fragments_in_xy=True, filter_value=0.5):
@@ -171,18 +155,22 @@ def watershed_from_boundary_distance(
     return ret
 
 
-def segment(
+def watershed(
         pred_file,
         pred_dataset,
+        fragments_file,
         roi=None,
         normalize_preds=False,
         min_seed_distance=10,
         background_mask=False,
         mask_thresh=0.5,
         filter_fragments_value=0.5,
-        merge_function="mean",
-        thresholds=None,
+        epsilon_agglomerate=0.05,
         **kwargs):
+
+    frag_str = f"{pred_dataset}_{normalize_preds}Norm_{background_mask}BoundaryMask{int(100*mask_thresh)}_{min_seed_distance}MinSeedDist_{int(100*filter_fragments_value)}FragFilter"
+    fragments_dataset = os.path.join("repost",frag_str,"fragments")
+    rag_path = os.path.join(fragments_file,"repost",frag_str,"rag.db")
 
     # load
     print("loading affs")
@@ -194,6 +182,23 @@ def segment(
         roi = pred.roi
 
     vs = pred.voxel_size
+
+    # to store nodes and fragments
+    out_frags = prepare_ds(
+            fragments_file,
+            fragments_dataset,
+            roi,
+            vs,
+            delete=True,
+            compressor=dict(id='blosc'),
+            dtype=np.uint64)
+
+    rag_provider = SQLiteGraphDataBase(
+            Path(rag_path),
+            mode="w",
+            position_attributes=["position_z", "position_y", "position_x"],
+            edge_attrs={"merge_score": float, "agglomerated": bool})
+    rag = rag_provider[roi]
 
     # first three channels are direct neighbor affs
     pred = pred.to_ndarray(roi)[:3]
@@ -229,9 +234,26 @@ def segment(
         print("filtering fragments")
         fragments = filter_fragments(fragments, pred, filter_value=filter_fragments_value)
 
+    # epsilon agglomerate
+    if epsilon_agglomerate > 0:
+        generator = waterz.agglomerate(
+                affs=pred,
+                thresholds=[epsilon_agglomerate],
+                fragments=fragments,
+                scoring_function='OneMinus<HistogramQuantileAffinity<RegionGraphType, 25, ScoreValue, 256, false>>',
+                discretize_queue=256,
+                return_merge_history=False,
+                return_region_graph=False)
+        fragments[:] = next(generator)
+
+        # cleanup generator
+        for _ in generator:
+            pass 
+
     fragment_ids = range(0,np.max(fragments))
 
     # get fragment centers
+    print("getting fragment centers")
     fragment_centers = {
         fragment: roi.get_offset() + vs*Coordinate(center)
         for fragment, center in zip(
@@ -240,8 +262,7 @@ def segment(
         if not np.isnan(center[0])
     }
 
-    # store nodes
-    rag = nx.Graph()
+    # write
     rag.add_nodes_from([
         (node, {
             'position_z': c[0],
@@ -251,68 +272,14 @@ def segment(
         )
         for node, c in fragment_centers.items()
     ])
+    
+    print("writing frags")
+    out_frags[roi] = fragments
 
-    # relabel fragments
-    fragments_relabelled, n, fragment_relabel_map = relabel(
-        fragments,
-        return_backwards_map=True)
+    print("writing rag")
+    rag_provider.write_graph(rag, roi)
 
-    # agglomerate
-    print("agglomerating")
-    generator = waterz.agglomerate(
-            pred,
-            thresholds=[0,1.0],
-            fragments=fragments_relabelled.copy(),
-            scoring_function=waterz_merge_function[merge_function],
-            return_merge_history=True,
-            return_region_graph=True,
-            )
-
-    # get fragment neighbors
-    _, _, initial_rag = next(generator)
-    for edge in initial_rag:
-        u, v = fragment_relabel_map[edge['u']], fragment_relabel_map[edge['v']]
-        rag.add_edge(int(u), int(v), merge_score=None, agglomerated=True)
-
-    #_, merge_rag = next(generator)
-    _, merge_history, _ = next(generator)
-
-    # cleanup generator
-    for _, _, _ in generator:
-        pass
-
-    # create a merge tree from the merge history
-    merge_tree = MergeTree(fragment_relabel_map)
-    for merge in merge_history:
-
-        a, b, c, score = merge['a'], merge['b'], merge['c'], merge['score']
-        merge_tree.merge(
-            fragment_relabel_map[a],
-            fragment_relabel_map[b],
-            fragment_relabel_map[c],
-            score)
-
-    # mark edges in original RAG with score at time of merging
-    num_merged = 0
-    for u, v, data in rag.edges(data=True):
-        merge_score = merge_tree.find_merge(u, v)
-        data['merge_score'] = merge_score
-
-    # find segments
-    luts = {}
-    if thresholds is None:
-        thresholds = [float(round(i,2)) for i in np.arange(0.25,0.85,0.05)]
-
-    for thresh in thresholds:
-        print(f"finding segments for {thresh}")
-        luts[thresh] = find_connected_components(
-                rag,
-                #node_component_attribute='segment_id',
-                edge_score_attribute='merge_score',
-                edge_score_threshold=thresh,
-                return_lut=True)
-
-    return luts, fragments, rag
+    return fragments_dataset, rag_path
 
 
 if __name__ == "__main__":
@@ -320,79 +287,33 @@ if __name__ == "__main__":
     pred_file = sys.argv[1]
     pred_dataset = sys.argv[2]
     out_file = sys.argv[3]
-    out_ds = sys.argv[4]
-    lut_dir = os.path.join(out_file,"luts")
-    os.makedirs(lut_dir, exist_ok=True)
-    rag_path = os.path.join(lut_dir,"rag.db")
    
     pred = open_ds(pred_file,pred_dataset)
     vs = pred.voxel_size
     roi = pred.roi
 
     try:
-        thresh = float(sys.argv[5])
-        merge_fn = sys.argv[6]
-        norm = bool(int(sys.argv[7]))
-        min_seed = int(sys.argv[8])
-        bg_mask = bool(int(sys.argv[9]))
-        mask_thresh = float(sys.argv[10])
-        filter_val = float(sys.argv[11])
+        norm = bool(int(sys.argv[4]))
+        bg_mask = bool(int(sys.argv[5]))
+        mask_thresh = float(sys.argv[6])
+        min_seed = int(sys.argv[7])
+        filter_val = float(sys.argv[8])
     except:
-        thresh = 0.5
-        merge_fn = "hist_quant_75"
         norm = False
-        min_seed = 10
+        min_seed = 15
         bg_mask = False
-        mask_thresh = 0.5
+        mask_thresh = 0.4
         filter_val = 0.0
     
-    luts,frags,rag = segment(
+    frag_ds, rag_path = watershed(
             pred_file,
             pred_dataset,
+            out_file,
             roi=[tuple(roi.offset),tuple(roi.shape)],
             normalize_preds=norm,
             min_seed_distance=min_seed,
             background_mask=bg_mask,
             mask_thresh=mask_thresh,
-            filter_fragments_value=filter_val,
-            merge_function=merge_fn,
-            thresholds=None)
-    
-    out_seg = prepare_ds(
-            out_file,
-            out_ds,
-            roi,
-            vs,
-            delete=True,
-            dtype=np.uint64)
-    
-    out_frags = prepare_ds(
-            out_file,
-            "frags",
-            roi,
-            vs,
-            delete=True,
-            dtype=np.uint64)
+            filter_fragments_value=filter_val)
 
-    print("writing seg")
-    out_frags[roi] = frags
-
-    lut = np.vectorize(luts[thresh].get)
-    seg = lut(frags)
-    out_seg[roi] = seg.astype(np.uint64)
-    
-    print("writing rag")
-    rag_provider = SQLiteGraphDataBase(
-            Path(rag_path),
-            mode="w",
-            position_attributes=["position_z", "position_y", "position_x"],
-            edge_attrs={"merge_score": float, "agglomerated": bool})
-    rag_provider.write_graph(rag, roi)
-
-    print("writing luts")
-    for thresh in luts:
-
-        lut_name = f"thresh_{int(thresh*100)}"
-        lut = luts[thresh]
-        lut = np.stack([list(lut.keys()),list(lut.values())]).astype(np.uint64)
-        np.save(os.path.join(lut_dir,lut_name), lut)
+    print(frag_ds, rag_path)
