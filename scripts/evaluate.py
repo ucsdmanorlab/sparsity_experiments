@@ -25,6 +25,8 @@ import tqdm
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+sys.setrecursionlimit(10000)
+
 
 class EvaluateAnnotations():
 
@@ -38,21 +40,23 @@ class EvaluateAnnotations():
             roi_offset,
             roi_shape,
             compute_mincut_metric,
-            thresholds_minmax=[0.2,0.9],
+            thresholds_minmax=[0.1,0.8],
             thresholds_step=0.05,
             **kwargs):
 
         self.labels_file = fragments_file.split('bootstrapped_nets/')[0] + "data/train.zarr"
-        self.labels = open_ds(self.labels_file, "labels")
+        self.labels = open_ds(self.labels_file, "labels_filtered_relabeled")
         self.fragments = open_ds(fragments_file, fragments_ds) 
         self.rag_path = rag_path
         self.edges_table = edges_table 
         self.lut_dir = lut_dir
-        self.skeletons_file = self.labels_file[:-5]+"_skel.graphml"
+        #self.skeletons_file = self.labels_file[:-5]+"_skel.graphml"
+        #self.skeletons_file = os.path.join(os.path.dirname(self.labels_file),"skeletons_train.db")
+        self.skeletons_file = os.path.join(os.path.dirname(self.labels_file),"waterz_skels_test.db")
         if roi_offset is not None:
             self.roi = Roi(roi_offset, roi_shape)
         else:
-            self.roi = self.labels.roi
+            self.roi = self.labels.roi.intersect(self.fragments.roi)
         self.voxel_size = self.labels.voxel_size
         self.compute_mincut_metric = compute_mincut_metric
         self.thresholds_minmax = thresholds_minmax
@@ -94,7 +98,7 @@ class EvaluateAnnotations():
     def prepare_for_fragments(self):
         '''Get the fragment ID for each site in site_ids.'''
 
-        site_fragment_lut, num_bg_sites = get_site_fragment_lut(self.fragments,self.skeletons.nodes(data=True))
+        site_fragment_lut, num_bg_sites = get_site_fragment_lut(self.fragments,self.skeletons.nodes(data=True),self.roi)
         self.num_bg_sites = num_bg_sites
 
         assert site_fragment_lut.dtype == np.uint64
@@ -120,6 +124,9 @@ class EvaluateAnnotations():
 
         skels = nx.read_graphml(self.skeletons_file)
 
+        bz, by, bx = self.roi.get_begin()
+        ez, ey, ex = self.roi.get_end()
+
         # remove outside nodes and edges
         remove_nodes = []
         for node, data in skels.nodes(data=True):
@@ -130,8 +137,16 @@ class EvaluateAnnotations():
             elif 'position_x' not in data:
                 remove_nodes.append(node)
             else:
-                assert data['id'] >= 0
+                if data['position_z'] < bz or data['position_z'] > ez:
+                    remove_nodes.append(node)
+                elif data['position_y'] < by or data['position_y'] > ey:
+                    remove_nodes.append(node)
+                elif data['position_x'] < bx or data['position_x'] > ex:
+                    remove_nodes.append(node)
+                else:
+                    assert data['id'] >= 0
 
+        logger.info("Removing %s nodes out of %s in gt skeletons", len(remove_nodes),len(skels.nodes))
         for node in remove_nodes:
             skels.remove_node(node)
 
@@ -475,11 +490,19 @@ class EvaluateAnnotations():
             (n['id'], {'segment_id': n['segment_id']})
             for n in nodes
         ]
-        edge_list = [
-            (e['u'], e['v'], {'merge_score': e['merge_score']})
-            for e in edges
-            if e['merge_score'] <= threshold
-        ]
+#        edge_list = [
+#            (e['u'], e['v'], {'merge_score': e['merge_score']})
+#            for e in edges
+#            if e['merge_score'] <= threshold
+#        ]
+        edge_list = []
+        for e in edges:
+            if e["merge_score"] is None:
+                edge_list.append((int(e['u']), int(e['v']), {'merge_score': 1.0}))
+            else:
+                if e['merge_score'] <= threshold:
+                    edge_list.append((int(e['u']), int(e['v']), {'merge_score': e['merge_score']}))
+
         rag.add_nodes_from(node_list)
         rag.add_edges_from(edge_list)
         rag.remove_nodes_from([
@@ -520,7 +543,8 @@ class EvaluateAnnotations():
     def compute_rand_voi(
         self,
         threshold,
-        return_cluster_scores=True):
+        return_cluster_scores=False):
+        #return_cluster_scores=True):
 
         lut_name = f"thresh_{int(threshold*100)}.npy"
         fragment_segment_lut = np.load(os.path.join(self.lut_dir,lut_name))
@@ -596,8 +620,8 @@ class EvaluateAnnotations():
 #            return_cluster_scores=True)
 
         report = rand_voi_report.copy()
-        report['merge_stats'] = merge_stats
-        report['split_stats'] = split_stats
+        #report['merge_stats'] = merge_stats
+        #report['split_stats'] = split_stats
 
         report['voi_sum'] = report['voi_split']+report['voi_merge']
         report['nvi_sum'] = report['nvi_split']+report['nvi_merge']
@@ -626,7 +650,7 @@ class EvaluateAnnotations():
         return report
 
 
-def get_site_fragment_lut(fragments, sites):
+def get_site_fragment_lut(fragments, sites, roi):
     '''Get the fragment IDs of all the sites that are contained in the given
     ROI.'''
 
@@ -637,6 +661,7 @@ def get_site_fragment_lut(fragments, sites):
         return None, None
 
     start = time.time()
+    fragments = fragments[roi]
     fragments.materialize()
     fragment_ids = np.array([
         fragments[Coordinate(site['position_z'], site['position_y'], site['position_x'])]
@@ -712,7 +737,7 @@ def parse_str(input_string):
 
 if __name__ == "__main__":
 
-    #frags_file = "/scratch/04101/vvenu/sparsity_experiments/cremi_c/bootstrapped_nets/affs-2d_dense/rep_1/train.zarr"
+    #frags_file = "/scratch/04101/vvenu/sparsity_experiments/cremi_a/bootstrapped_nets/affs-2d_dense/rep_1/train.zarr"
     #frags_file = "test.zarr"
     #frag_str = "affs_50000_FalseNorm_FalseBoundaryMask50_15MinSeedDist_0FragFilter"
     #merge_function = "mean"
@@ -731,18 +756,16 @@ if __name__ == "__main__":
         "rep": frags_file.split('/')[-2],
         "merge_function": merge_function}
 
-    results_out_dir = f"/scratch/04101/vvenu/sparsity_experiments/jobs/RE_EVAL/{args['dataset']}/results"
+    results_out_dir = f"/scratch1/04101/vvenu/sparsity/experiment/{args['dataset']}/results"
 
     if not os.path.exists(os.path.join(results_out_dir,f"{idx}.json")):
-        frags_ds = os.path.join("repost",frag_str,"fragments")
+        frags_ds = os.path.join("small_grid",frag_str,"fragments")
         edges_table = "edges_"+merge_function
-        rag_path = os.path.join(frags_file,"repost",frag_str,"rag.db")
-        lut_dir = os.path.join(frags_file,"repost",frag_str,"luts",merge_function)
+        rag_path = os.path.join(frags_file,"small_grid",frag_str,"rag.db")
+        lut_dir = os.path.join(frags_file,"small_grid",frag_str,"luts",merge_function)
 
-        fragments = open_ds(frags_file,frags_ds)
-        roi = fragments.roi
-        roi_offset = roi.get_offset()
-        roi_shape = roi.get_shape()
+        roi_offset = None
+        roi_shape = None
         compute_mincut_metric = True
 
         evaluate = EvaluateAnnotations(
@@ -760,3 +783,6 @@ if __name__ == "__main__":
         
         with open(os.path.join(results_out_dir,f"{idx}.json"),"w") as f:
             json.dump(args | ret,f,indent=4)
+
+    else:
+        print(f"{idx} exists")
