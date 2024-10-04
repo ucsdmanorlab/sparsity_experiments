@@ -2,7 +2,8 @@
 
 This repository contains the experimental code used for the preprint **[A deep learning-based strategy for producing dense 3D segmentations from sparsely annotated 2D images](https://www.biorxiv.org/content/10.1101/2024.06.14.599135v1)**.
 
-## Important Notice
+## Important Notice ⚠️
+
 **This repository is no longer being maintained.** It serves as an archive of the models and scripts used in the experiments conducted for the paper. For the most up-to-date implementation of these methods, please refer to https://github.com/ucsdmanorlab/bootstrapper.git
 
 The code assumes some familiarity with gunpowder for the training and prediction pipelines. See [lsd](https://github.com/funkelab/lsd) and [gunpowder](https://github.com/funkelab/gunpowder) for helpful introductory tutorials and notebooks!
